@@ -1,97 +1,74 @@
 /**
- * ParodyEditor — Core component
- * Split panel: left = original lyrics (read-only after paste), right = editable parody.
- * Words are linked line-by-line. Modified words get amber highlight.
- * Hovering a word highlights its counterpart in cyan.
+ * ParodyEditor — Free-typing version
+ * Left: Original lyrics (read-only display after paste).
+ * Right: Freely editable textarea for parody.
+ * Words are linked by line and position automatically.
+ * Hovering a word on the original side highlights the corresponding word on the parody side and vice versa.
+ * Modified words (different from original) get amber highlight on both sides.
  */
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-
-interface WordPair {
-  original: string;
-  parody: string;
-  modified: boolean;
-}
-
-interface LinePair {
-  words: WordPair[];
-}
 
 export function ParodyEditor() {
   const [originalText, setOriginalText] = useState("");
-  const [lines, setLines] = useState<LinePair[]>([]);
+  const [parodyText, setParodyText] = useState("");
   const [hoveredWord, setHoveredWord] = useState<{ line: number; word: number } | null>(null);
-  const [editingWord, setEditingWord] = useState<{ line: number; word: number } | null>(null);
-  const [editValue, setEditValue] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const parodyRef = useRef<HTMLTextAreaElement>(null);
 
-  const hasContent = lines.length > 0;
+  const hasContent = originalText.trim().length > 0;
 
-  // Parse pasted text into linked word pairs
-  const handlePaste = useCallback((text: string) => {
-    setOriginalText(text);
-    const rawLines = text.split("\n");
-    const parsed: LinePair[] = rawLines.map((line) => {
-      const words = line.split(/(\s+)/).filter((w) => w.length > 0);
-      return {
-        words: words.map((w) => ({
-          original: w,
-          parody: w,
-          modified: false,
-        })),
-      };
-    });
-    setLines(parsed);
+  // Parse text into lines of words (non-whitespace tokens)
+  const parseWords = useCallback((text: string): string[][] => {
+    return text.split("\n").map((line) =>
+      line.split(/\s+/).filter((w) => w.length > 0)
+    );
   }, []);
 
-  // Start editing a word on the parody side
-  const startEdit = useCallback((lineIdx: number, wordIdx: number) => {
-    const word = lines[lineIdx]?.words[wordIdx];
-    if (!word || word.original.trim() === "") return; // don't edit whitespace
-    setEditingWord({ line: lineIdx, word: wordIdx });
-    setEditValue(word.parody);
-  }, [lines]);
+  const originalWords = useMemo(() => parseWords(originalText), [originalText, parseWords]);
+  const parodyWords = useMemo(() => parseWords(parodyText), [parodyText, parseWords]);
 
-  // Commit edit
-  const commitEdit = useCallback(() => {
-    if (!editingWord) return;
-    setLines((prev) => {
-      const next = [...prev];
-      const line = { ...next[editingWord.line] };
-      const words = [...line.words];
-      const word = { ...words[editingWord.word] };
-      word.parody = editValue;
-      word.modified = editValue !== word.original;
-      words[editingWord.word] = word;
-      line.words = words;
-      next[editingWord.line] = line;
-      return next;
-    });
-    setEditingWord(null);
-    setEditValue("");
-  }, [editingWord, editValue]);
+  // Determine which words differ
+  const getDiffStatus = useCallback(
+    (lineIdx: number, wordIdx: number): boolean => {
+      const orig = originalWords[lineIdx]?.[wordIdx] ?? "";
+      const paro = parodyWords[lineIdx]?.[wordIdx] ?? "";
+      if (orig === "" && paro === "") return false;
+      return orig !== paro;
+    },
+    [originalWords, parodyWords]
+  );
 
-  // Focus input when editing starts
-  useEffect(() => {
-    if (editingWord && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
+  // Count modified words
+  const modifiedCount = useMemo(() => {
+    let count = 0;
+    const maxLines = Math.max(originalWords.length, parodyWords.length);
+    for (let l = 0; l < maxLines; l++) {
+      const maxWords = Math.max(
+        originalWords[l]?.length ?? 0,
+        parodyWords[l]?.length ?? 0
+      );
+      for (let w = 0; w < maxWords; w++) {
+        if (getDiffStatus(l, w)) count++;
+      }
     }
-  }, [editingWord]);
+    return count;
+  }, [originalWords, parodyWords, getDiffStatus]);
 
-  // Export parody text
-  const getParodyText = useCallback(() => {
-    return lines.map((line) => line.words.map((w) => w.parody).join("")).join("\n");
-  }, [lines]);
+  // Handle initial paste
+  const handlePaste = useCallback((text: string) => {
+    setOriginalText(text);
+    setParodyText(text);
+  }, []);
 
+  // Copy parody to clipboard
   const copyParody = useCallback(() => {
-    navigator.clipboard.writeText(getParodyText());
-  }, [getParodyText]);
+    navigator.clipboard.writeText(parodyText);
+  }, [parodyText]);
 
+  // Clear everything
   const clearAll = useCallback(() => {
     setOriginalText("");
-    setLines([]);
-    setEditingWord(null);
+    setParodyText("");
     setHoveredWord(null);
   }, []);
 
@@ -113,17 +90,18 @@ export function ParodyEditor() {
             Clear All
           </button>
           <span className="ml-auto text-xs font-mono text-muted-foreground">
-            {lines.reduce((acc, l) => acc + l.words.filter((w) => w.modified).length, 0)} words modified
+            {modifiedCount} word{modifiedCount !== 1 ? "s" : ""} modified
           </span>
         </div>
       )}
 
-      {/* Split panels */}
+      {/* Main content */}
       <div className="flex-1 overflow-hidden">
         {!hasContent ? (
           <PastePrompt onPaste={handlePaste} />
         ) : (
           <ResizablePanelGroup direction="horizontal" className="h-full">
+            {/* Left panel: Original (read-only, word-highlighted) */}
             <ResizablePanel defaultSize={50} minSize={30}>
               <div className="h-full flex flex-col">
                 <div className="px-5 py-2 border-b border-border bg-card/20">
@@ -132,30 +110,30 @@ export function ParodyEditor() {
                   </span>
                 </div>
                 <div className="flex-1 overflow-y-auto p-5 font-mono text-sm leading-7">
-                  {lines.map((line, lineIdx) => (
+                  {originalWords.map((line, lineIdx) => (
                     <div key={lineIdx} className="min-h-[1.75rem]">
-                      {line.words.map((word, wordIdx) => {
+                      {line.length === 0 && <br />}
+                      {line.map((word, wordIdx) => {
                         const isHovered =
-                          hoveredWord?.line === lineIdx && hoveredWord?.word === wordIdx;
-                        const isWhitespace = word.original.trim() === "";
+                          hoveredWord?.line === lineIdx &&
+                          hoveredWord?.word === wordIdx;
+                        const isModified = getDiffStatus(lineIdx, wordIdx);
                         return (
                           <span
                             key={wordIdx}
-                            className={`inline transition-all duration-150 ${
-                              isWhitespace
-                                ? ""
-                                : isHovered
-                                ? "bg-primary/20 text-primary rounded px-0.5"
-                                : word.modified
-                                ? "text-muted-foreground line-through decoration-accent/50"
+                            className={`inline-block mr-[0.5ch] transition-all duration-150 rounded px-0.5 ${
+                              isHovered
+                                ? "bg-primary/25 text-primary"
+                                : isModified
+                                ? "text-muted-foreground line-through decoration-accent/60"
                                 : "text-foreground"
                             }`}
                             onMouseEnter={() =>
-                              !isWhitespace && setHoveredWord({ line: lineIdx, word: wordIdx })
+                              setHoveredWord({ line: lineIdx, word: wordIdx })
                             }
                             onMouseLeave={() => setHoveredWord(null)}
                           >
-                            {word.original}
+                            {word}
                           </span>
                         );
                       })}
@@ -167,6 +145,7 @@ export function ParodyEditor() {
 
             <ResizableHandle className="w-[3px] bg-border hover:bg-primary/50 transition-colors" />
 
+            {/* Right panel: Parody (free-typing textarea + word overlay for highlights) */}
             <ResizablePanel defaultSize={50} minSize={30}>
               <div className="h-full flex flex-col">
                 <div className="px-5 py-2 border-b border-border bg-card/20">
@@ -174,61 +153,46 @@ export function ParodyEditor() {
                     Parody
                   </span>
                 </div>
-                <div className="flex-1 overflow-y-auto p-5 font-mono text-sm leading-7">
-                  {lines.map((line, lineIdx) => (
-                    <div key={lineIdx} className="min-h-[1.75rem]">
-                      {line.words.map((word, wordIdx) => {
-                        const isHovered =
-                          hoveredWord?.line === lineIdx && hoveredWord?.word === wordIdx;
-                        const isEditing =
-                          editingWord?.line === lineIdx && editingWord?.word === wordIdx;
-                        const isWhitespace = word.original.trim() === "";
-
-                        if (isEditing) {
+                <div className="flex-1 overflow-y-auto relative">
+                  {/* Highlight layer (behind textarea) */}
+                  <div
+                    className="absolute inset-0 p-5 font-mono text-sm leading-7 pointer-events-none whitespace-pre-wrap break-words text-transparent"
+                    aria-hidden="true"
+                  >
+                    {parodyWords.map((line, lineIdx) => (
+                      <div key={lineIdx} className="min-h-[1.75rem]">
+                        {line.length === 0 && <br />}
+                        {line.map((word, wordIdx) => {
+                          const isHovered =
+                            hoveredWord?.line === lineIdx &&
+                            hoveredWord?.word === wordIdx;
+                          const isModified = getDiffStatus(lineIdx, wordIdx);
                           return (
-                            <input
+                            <span
                               key={wordIdx}
-                              ref={inputRef}
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value)}
-                              onBlur={commitEdit}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") commitEdit();
-                                if (e.key === "Escape") {
-                                  setEditingWord(null);
-                                  setEditValue("");
-                                }
-                              }}
-                              className="inline-block bg-primary/20 border border-primary rounded px-1 py-0 font-mono text-sm text-primary outline-none min-w-[2ch]"
-                              style={{ width: `${Math.max(editValue.length, 2)}ch` }}
-                            />
+                              className={`inline-block mr-[0.5ch] rounded px-0.5 ${
+                                isHovered
+                                  ? "bg-primary/25"
+                                  : isModified
+                                  ? "bg-accent/15"
+                                  : ""
+                              }`}
+                            >
+                              {word}
+                            </span>
                           );
-                        }
-
-                        return (
-                          <span
-                            key={wordIdx}
-                            className={`inline transition-all duration-150 ${
-                              isWhitespace
-                                ? ""
-                                : isHovered
-                                ? "bg-primary/20 text-primary rounded px-0.5 cursor-pointer"
-                                : word.modified
-                                ? "bg-accent/15 text-accent rounded px-0.5 cursor-pointer font-medium"
-                                : "text-foreground cursor-pointer hover:text-primary/80"
-                            }`}
-                            onMouseEnter={() =>
-                              !isWhitespace && setHoveredWord({ line: lineIdx, word: wordIdx })
-                            }
-                            onMouseLeave={() => setHoveredWord(null)}
-                            onClick={() => !isWhitespace && startEdit(lineIdx, wordIdx)}
-                          >
-                            {word.parody}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  ))}
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Editable textarea (on top, transparent background) */}
+                  <textarea
+                    ref={parodyRef}
+                    value={parodyText}
+                    onChange={(e) => setParodyText(e.target.value)}
+                    spellCheck={false}
+                    className="absolute inset-0 w-full h-full p-5 font-mono text-sm leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words"
+                  />
                 </div>
               </div>
             </ResizablePanel>
@@ -242,7 +206,6 @@ export function ParodyEditor() {
 /** Initial paste prompt */
 function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
   const [value, setValue] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSubmit = () => {
     if (value.trim()) {
@@ -250,7 +213,6 @@ function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
     }
   };
 
-  // Also handle paste event directly
   const handlePasteEvent = (e: React.ClipboardEvent) => {
     const text = e.clipboardData.getData("text");
     if (text.trim()) {
@@ -263,13 +225,14 @@ function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
     <div className="h-full flex items-center justify-center p-8">
       <div className="w-full max-w-2xl flex flex-col items-center gap-6">
         <div className="text-center space-y-2">
-          <h2 className="text-2xl font-semibold text-foreground">Paste Your Song Lyrics</h2>
+          <h2 className="text-2xl font-semibold text-foreground">
+            Paste Your Song Lyrics
+          </h2>
           <p className="text-sm text-muted-foreground font-mono">
-            Paste the original lyrics below, then click any word on the right to write your parody
+            Paste the original lyrics below, then freely edit your parody on the right
           </p>
         </div>
         <textarea
-          ref={textareaRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onPaste={handlePasteEvent}
