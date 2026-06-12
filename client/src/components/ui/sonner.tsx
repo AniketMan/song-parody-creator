@@ -1,9 +1,12 @@
+import { useTheme } from "@/contexts/ThemeContext";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 const Toaster = ({ ...props }: ToasterProps) => {
+  const { resolved } = useTheme();
+
   return (
     <Sonner
-      theme="dark"
+      theme={resolved as ToasterProps["theme"]}
       className="toaster group"
       style={
         {

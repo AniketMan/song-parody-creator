@@ -1,10 +1,6 @@
 /**
- * ParodyEditor — Both sides editable with Replace All
- * Left: Original lyrics (editable textarea).
- * Right: Parody lyrics (editable textarea).
- * Words linked by line/position. Modified words get highlighted.
- * Clicking a highlighted word on the parody side offers "Replace All" to swap every
- * instance of the original word with the new parody word.
+ * ParodyEditor — Apple-style clean dual-panel editor
+ * Both sides editable with automatic word-level diff and Replace All.
  */
 import { useState, useCallback, useMemo, useRef } from "react";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -23,7 +19,6 @@ export function ParodyEditor() {
   const [popup, setPopup] = useState<ReplaceAllPopup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Parse text into lines of words
   const parseWords = useCallback((text: string): string[][] => {
     return text.split("\n").map((line) =>
       line.split(/\s+/).filter((w) => w.length > 0)
@@ -33,7 +28,6 @@ export function ParodyEditor() {
   const originalWords = useMemo(() => parseWords(originalText), [originalText, parseWords]);
   const parodyWords = useMemo(() => parseWords(parodyText), [parodyText, parseWords]);
 
-  // Count modified words
   const modifiedCount = useMemo(() => {
     let count = 0;
     const maxLines = Math.max(originalWords.length, parodyWords.length);
@@ -51,7 +45,6 @@ export function ParodyEditor() {
     return count;
   }, [originalWords, parodyWords]);
 
-  // Handle initial paste
   const handlePaste = useCallback((text: string) => {
     setOriginalText(text);
     setParodyText(text);
@@ -69,53 +62,45 @@ export function ParodyEditor() {
     setPopup(null);
   }, []);
 
-  // Determine diff status for a word position
   const getDiffClass = useCallback(
     (side: "original" | "parody", lineIdx: number, wordIdx: number): string => {
       const orig = originalWords[lineIdx]?.[wordIdx] ?? "";
       const paro = parodyWords[lineIdx]?.[wordIdx] ?? "";
       if (orig === paro) return "";
-      if (side === "original") return "bg-destructive/20";
-      return "bg-accent/20";
+      if (side === "original") return "bg-[#ff3b30]/10 dark:bg-[#ff453a]/15";
+      return "bg-[#0066cc]/10 dark:bg-[#2997ff]/15";
     },
     [originalWords, parodyWords]
   );
 
-  // Handle clicking a highlighted parody word to show Replace All popup
   const handleParodyWordClick = useCallback(
     (e: React.MouseEvent, lineIdx: number, wordIdx: number) => {
       const orig = originalWords[lineIdx]?.[wordIdx] ?? "";
       const paro = parodyWords[lineIdx]?.[wordIdx] ?? "";
       if (orig === paro || !orig || !paro) return;
 
-      // Count how many other instances of the original word exist
       let instanceCount = 0;
       for (const line of originalWords) {
         for (const w of line) {
           if (w.toLowerCase() === orig.toLowerCase()) instanceCount++;
         }
       }
-
-      // Only show popup if there are other instances to replace
       if (instanceCount <= 1) return;
 
       const rect = containerRef.current?.getBoundingClientRect();
       const x = e.clientX - (rect?.left ?? 0);
       const y = e.clientY - (rect?.top ?? 0);
-
       setPopup({ originalWord: orig, newWord: paro, x, y });
     },
     [originalWords, parodyWords]
   );
 
-  // Replace all instances of originalWord with newWord in parody text
   const handleReplaceAll = useCallback(() => {
     if (!popup) return;
     const { originalWord, newWord } = popup;
 
-    // Build new parody by replacing every word that matches the original
     const newParodyLines = parodyText.split("\n").map((line, lineIdx) => {
-      const words = line.split(/(\s+)/); // preserve whitespace
+      const words = line.split(/(\s+)/);
       const origLine = originalWords[lineIdx] ?? [];
       let origWordIdx = 0;
 
@@ -124,11 +109,13 @@ export function ParodyEditor() {
           if (token.match(/^\s*$/) || token.length === 0) return token;
           const correspondingOrig = origLine[origWordIdx] ?? "";
           origWordIdx++;
-          // If the original word at this position matches and the parody word hasn't been changed yet
-          if (correspondingOrig.toLowerCase() === originalWord.toLowerCase() && token.toLowerCase() === originalWord.toLowerCase()) {
-            // Preserve case pattern
+          if (
+            correspondingOrig.toLowerCase() === originalWord.toLowerCase() &&
+            token.toLowerCase() === originalWord.toLowerCase()
+          ) {
             if (correspondingOrig === correspondingOrig.toUpperCase()) return newWord.toUpperCase();
-            if (correspondingOrig[0] === correspondingOrig[0].toUpperCase()) return newWord[0].toUpperCase() + newWord.slice(1);
+            if (correspondingOrig[0] === correspondingOrig[0].toUpperCase())
+              return newWord[0].toUpperCase() + newWord.slice(1);
             return newWord;
           }
           return token;
@@ -149,21 +136,21 @@ export function ParodyEditor() {
   return (
     <div className="h-full flex flex-col relative" ref={containerRef} onClick={dismissPopup}>
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-5 py-2 border-b border-border bg-card/30">
+      <div className="flex items-center gap-3 px-6 py-2.5 border-b border-border/60 bg-secondary/50">
         <button
           onClick={copyParody}
-          className="px-3 py-1.5 text-xs font-mono font-medium bg-primary/10 text-primary border border-primary/30 rounded hover:bg-primary/20 transition-colors"
+          className="px-3.5 py-1.5 text-[13px] font-medium text-primary rounded-full border border-primary/30 hover:bg-primary/5 transition-colors"
         >
           Copy Parody
         </button>
         <button
           onClick={clearAll}
-          className="px-3 py-1.5 text-xs font-mono font-medium bg-destructive/10 text-destructive border border-destructive/30 rounded hover:bg-destructive/20 transition-colors"
+          className="px-3.5 py-1.5 text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
         >
-          Clear All
+          Start Over
         </button>
-        <span className="ml-auto text-xs font-mono text-muted-foreground">
-          {modifiedCount} word{modifiedCount !== 1 ? "s" : ""} modified
+        <span className="ml-auto text-[13px] text-muted-foreground tabular-nums">
+          {modifiedCount} {modifiedCount === 1 ? "change" : "changes"}
         </span>
       </div>
 
@@ -173,15 +160,14 @@ export function ParodyEditor() {
           {/* Left: Original */}
           <ResizablePanel defaultSize={50} minSize={30}>
             <div className="h-full flex flex-col">
-              <div className="px-5 py-2 border-b border-border bg-card/20">
-                <span className="text-xs font-mono font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="px-6 py-2 border-b border-border/40">
+                <span className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Original
                 </span>
               </div>
               <div className="flex-1 overflow-y-auto relative">
-                {/* Highlight layer */}
                 <div
-                  className="absolute inset-0 p-5 font-mono text-sm leading-7 pointer-events-none whitespace-pre-wrap break-words"
+                  className="absolute inset-0 p-6 font-mono text-[14px] leading-7 pointer-events-none whitespace-pre-wrap break-words"
                   aria-hidden="true"
                 >
                   {originalWords.map((line, lineIdx) => (
@@ -192,7 +178,7 @@ export function ParodyEditor() {
                         return (
                           <span
                             key={wordIdx}
-                            className={`inline-block mr-[0.5ch] rounded px-0.5 text-transparent ${cls}`}
+                            className={`inline-block mr-[0.5ch] rounded-[4px] px-0.5 text-transparent ${cls}`}
                           >
                             {word}
                           </span>
@@ -201,31 +187,29 @@ export function ParodyEditor() {
                     </div>
                   ))}
                 </div>
-                {/* Editable textarea */}
                 <textarea
                   value={originalText}
                   onChange={(e) => setOriginalText(e.target.value)}
                   spellCheck={false}
-                  className="absolute inset-0 w-full h-full p-5 font-mono text-sm leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words"
+                  className="absolute inset-0 w-full h-full p-6 font-mono text-[14px] leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words"
                 />
               </div>
             </div>
           </ResizablePanel>
 
-          <ResizableHandle className="w-[3px] bg-border hover:bg-primary/50 transition-colors" />
+          <ResizableHandle className="w-px bg-border/60 hover:bg-primary/40 transition-colors data-[resize-handle-active]:bg-primary/60" />
 
           {/* Right: Parody */}
           <ResizablePanel defaultSize={50} minSize={30}>
             <div className="h-full flex flex-col">
-              <div className="px-5 py-2 border-b border-border bg-card/20">
-                <span className="text-xs font-mono font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="px-6 py-2 border-b border-border/40">
+                <span className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Parody
                 </span>
               </div>
               <div className="flex-1 overflow-y-auto relative">
-                {/* Highlight layer — clickable for Replace All */}
                 <div
-                  className="absolute inset-0 p-5 font-mono text-sm leading-7 whitespace-pre-wrap break-words z-10"
+                  className="absolute inset-0 p-6 font-mono text-[14px] leading-7 whitespace-pre-wrap break-words z-10"
                   style={{ pointerEvents: "none" }}
                 >
                   {parodyWords.map((line, lineIdx) => (
@@ -237,8 +221,15 @@ export function ParodyEditor() {
                         return (
                           <span
                             key={wordIdx}
-                            onClick={isModified ? (e) => { e.stopPropagation(); handleParodyWordClick(e, lineIdx, wordIdx); } : undefined}
-                            className={`inline-block mr-[0.5ch] rounded px-0.5 text-transparent ${cls} ${isModified ? "cursor-pointer pointer-events-auto hover:ring-1 hover:ring-primary/50" : ""}`}
+                            onClick={
+                              isModified
+                                ? (e) => {
+                                    e.stopPropagation();
+                                    handleParodyWordClick(e, lineIdx, wordIdx);
+                                  }
+                                : undefined
+                            }
+                            className={`inline-block mr-[0.5ch] rounded-[4px] px-0.5 text-transparent ${cls} ${isModified ? "cursor-pointer pointer-events-auto hover:ring-1 hover:ring-primary/40" : ""}`}
                           >
                             {word}
                           </span>
@@ -247,12 +238,14 @@ export function ParodyEditor() {
                     </div>
                   ))}
                 </div>
-                {/* Editable textarea */}
                 <textarea
                   value={parodyText}
-                  onChange={(e) => { setParodyText(e.target.value); setPopup(null); }}
+                  onChange={(e) => {
+                    setParodyText(e.target.value);
+                    setPopup(null);
+                  }}
                   spellCheck={false}
-                  className="absolute inset-0 w-full h-full p-5 font-mono text-sm leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words"
+                  className="absolute inset-0 w-full h-full p-6 font-mono text-[14px] leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words"
                 />
               </div>
             </div>
@@ -263,23 +256,26 @@ export function ParodyEditor() {
       {/* Replace All Popup */}
       {popup && (
         <div
-          className="absolute z-50 bg-card border border-border rounded-lg shadow-xl p-3 flex flex-col gap-2 min-w-[200px]"
+          className="absolute z-50 bg-popover border border-border rounded-xl shadow-lg p-4 flex flex-col gap-3 min-w-[220px]"
           style={{ left: popup.x, top: popup.y + 8 }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="text-xs font-mono text-muted-foreground">
-            Replace all <span className="text-destructive font-semibold">"{popup.originalWord}"</span> with <span className="text-primary font-semibold">"{popup.newWord}"</span>?
-          </div>
+          <p className="text-[13px] text-foreground leading-snug">
+            Replace all{" "}
+            <span className="font-semibold text-destructive">"{popup.originalWord}"</span>
+            {" "}with{" "}
+            <span className="font-semibold text-primary">"{popup.newWord}"</span>?
+          </p>
           <div className="flex gap-2">
             <button
               onClick={handleReplaceAll}
-              className="flex-1 px-3 py-1.5 text-xs font-mono font-medium bg-primary text-primary-foreground rounded hover:opacity-90 transition-opacity"
+              className="flex-1 px-3.5 py-2 text-[13px] font-medium bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity"
             >
               Replace All
             </button>
             <button
               onClick={dismissPopup}
-              className="flex-1 px-3 py-1.5 text-xs font-mono font-medium bg-muted text-muted-foreground rounded hover:bg-muted/80 transition-colors"
+              className="flex-1 px-3.5 py-2 text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
             >
               Cancel
             </button>
@@ -295,9 +291,7 @@ function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
   const [value, setValue] = useState("");
 
   const handleSubmit = () => {
-    if (value.trim()) {
-      onPaste(value);
-    }
+    if (value.trim()) onPaste(value);
   };
 
   const handlePasteEvent = (e: React.ClipboardEvent) => {
@@ -310,13 +304,13 @@ function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
 
   return (
     <div className="h-full flex items-center justify-center p-8">
-      <div className="w-full max-w-2xl flex flex-col items-center gap-6">
+      <div className="w-full max-w-xl flex flex-col items-center gap-8">
         <div className="text-center space-y-2">
-          <h2 className="text-2xl font-semibold text-foreground">
-            Paste Your Song Lyrics
+          <h2 className="text-[28px] font-semibold tracking-tight text-foreground">
+            Paste your lyrics
           </h2>
-          <p className="text-sm text-muted-foreground font-mono">
-            Paste the original lyrics below, then freely edit both sides
+          <p className="text-[15px] text-muted-foreground">
+            Drop in the original, then edit your parody side by side.
           </p>
         </div>
         <textarea
@@ -324,12 +318,12 @@ function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
           onChange={(e) => setValue(e.target.value)}
           onPaste={handlePasteEvent}
           placeholder="Paste song lyrics here..."
-          className="w-full h-64 bg-card border border-border rounded-lg p-4 font-mono text-sm text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all"
+          className="w-full h-56 bg-background border border-border rounded-xl p-5 font-mono text-[14px] text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all"
         />
         <button
           onClick={handleSubmit}
           disabled={!value.trim()}
-          className="px-6 py-2.5 bg-primary text-primary-foreground font-mono font-semibold text-sm rounded-lg hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+          className="px-6 py-2.5 bg-primary text-primary-foreground text-[15px] font-medium rounded-full hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
         >
           Load Lyrics
         </button>

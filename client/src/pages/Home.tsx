@@ -1,27 +1,31 @@
 /**
- * Song Parody Creator — Studio Console Design
- * Dark DAW-inspired interface with split panel layout.
- * Left: Original lyrics (paste). Right: Editable parody with word-level linking.
- * Cyan connection lines on hover, amber highlights on modified words.
+ * Song Parody Creator — Apple-style clean interface
+ * System-following light/dark with toggle.
  */
 import { ParodyEditor } from "@/components/ParodyEditor";
+import { useTheme } from "@/contexts/ThemeContext";
+import { Monitor, Moon, Sun } from "lucide-react";
 
 export default function Home() {
+  const { mode, cycle } = useTheme();
+
   return (
-    <div className="h-screen flex flex-col bg-background overflow-hidden">
-      {/* Header strip */}
-      <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-card/50 backdrop-blur-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-3 h-3 rounded-full bg-primary animate-pulse" />
-          <h1 className="text-sm font-semibold font-mono tracking-wide uppercase text-foreground">
-            Song Parody Creator
-          </h1>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-xs font-mono text-muted-foreground">
-            Paste original on left, edit parody on right
-          </span>
-        </div>
+    <div className="h-screen flex flex-col overflow-hidden">
+      {/* Header */}
+      <header className="flex items-center justify-between px-6 py-3 border-b border-border/60">
+        <h1 className="text-[15px] font-semibold tracking-tight text-foreground">
+          Song Parody Creator
+        </h1>
+        <button
+          onClick={cycle}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          title={`Theme: ${mode}`}
+        >
+          {mode === "system" && <Monitor size={14} />}
+          {mode === "light" && <Sun size={14} />}
+          {mode === "dark" && <Moon size={14} />}
+          <span className="capitalize">{mode}</span>
+        </button>
       </header>
 
       {/* Main editor area */}
