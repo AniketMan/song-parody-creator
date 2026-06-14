@@ -1,16 +1,27 @@
 /**
- * ParodyEditor — Always side-by-side dual-panel editor.
- * Works on all screen sizes including mobile.
- * Highlight overlay scrolls in sync with the textarea via onScroll mirroring.
- * Uses a simple 50/50 flex split (no resizable on mobile for touch friendliness).
+ * ParodyEditor — Dual-panel editor with scroll-synced highlights.
+ * Desktop (>=768px): side-by-side horizontal split.
+ * Mobile (<768px): vertical stack (original top, parody bottom).
+ * Both panels always visible. Highlight overlay scrolls in sync with textarea.
  */
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 
 interface ReplaceAllPopup {
   originalWord: string;
   newWord: string;
   x: number;
   y: number;
+}
+
+function useIsMobile() {
+  const [mobile, setMobile] = useState(window.innerWidth < 768);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return mobile;
 }
 
 /** A single editor pane with scroll-synced highlight overlay */
@@ -42,17 +53,17 @@ function EditorPane({
   }, []);
 
   return (
-    <div className="h-full flex flex-col min-w-0">
-      <div className="px-3 sm:px-4 md:px-6 py-2 border-b border-border/40 shrink-0">
+    <div className="h-full flex flex-col min-w-0 min-h-0">
+      <div className="px-3 sm:px-4 md:px-6 py-1.5 sm:py-2 border-b border-border/40 shrink-0">
         <span className="text-[11px] sm:text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
       </div>
-      <div className="flex-1 relative overflow-hidden">
-        {/* Highlight overlay — scrolls in sync with textarea */}
+      <div className="flex-1 relative overflow-hidden min-h-0">
+        {/* Highlight overlay */}
         <div
           ref={highlightRef}
-          className="absolute inset-0 p-3 sm:p-4 md:p-6 font-mono text-[12px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
+          className="absolute inset-0 p-3 sm:p-4 md:p-6 font-mono text-[13px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
           aria-hidden="true"
         >
           {words.map((line, lineIdx) => (
@@ -81,14 +92,14 @@ function EditorPane({
             </div>
           ))}
         </div>
-        {/* Textarea — user types here, scroll syncs to highlight */}
+        {/* Textarea */}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onScroll={handleScroll}
           spellCheck={false}
-          className="absolute inset-0 w-full h-full p-3 sm:p-4 md:p-6 font-mono text-[12px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words overflow-auto"
+          className="absolute inset-0 w-full h-full p-3 sm:p-4 md:p-6 font-mono text-[13px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words overflow-auto"
         />
       </div>
     </div>
@@ -101,6 +112,7 @@ export function ParodyEditor() {
   const [initialized, setInitialized] = useState(false);
   const [popup, setPopup] = useState<ReplaceAllPopup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
 
   const parseWords = useCallback((text: string): string[][] => {
     return text.split("\n").map((line) =>
@@ -237,10 +249,10 @@ export function ParodyEditor() {
         </span>
       </div>
 
-      {/* Always side-by-side panels */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left: Original */}
-        <div className="flex-1 border-r border-border/60 min-w-0">
+      {/* Panels: vertical on mobile, horizontal on desktop */}
+      <div className={`flex-1 flex overflow-hidden min-h-0 ${isMobile ? "flex-col" : "flex-row"}`}>
+        {/* Original */}
+        <div className={`min-w-0 min-h-0 ${isMobile ? "flex-1 border-b border-border/60" : "flex-1 border-r border-border/60"}`}>
           <EditorPane
             label="Original"
             text={originalText}
@@ -250,8 +262,8 @@ export function ParodyEditor() {
             side="original"
           />
         </div>
-        {/* Right: Parody */}
-        <div className="flex-1 min-w-0">
+        {/* Parody */}
+        <div className="flex-1 min-w-0 min-h-0">
           <EditorPane
             label="Parody"
             text={parodyText}
