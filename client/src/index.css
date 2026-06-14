@@ -101,6 +101,12 @@
   }
 }
 
+@layer base {
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @layer components {
   .container {
     width: 100%;

@@ -60,10 +60,11 @@ function EditorPane({
         </span>
       </div>
       <div className="flex-1 relative overflow-hidden min-h-0">
-        {/* Highlight overlay */}
+        {/* Highlight overlay — uses overflow:auto so scrollTop works, but scrollbar is hidden */}
         <div
           ref={highlightRef}
-          className="absolute inset-0 p-3 sm:p-4 md:p-6 font-mono text-[13px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
+          className="absolute inset-0 p-3 sm:p-4 md:p-6 font-mono text-[13px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 whitespace-pre-wrap break-words overflow-auto pointer-events-none hide-scrollbar"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
           aria-hidden="true"
         >
           {words.map((line, lineIdx) => (
