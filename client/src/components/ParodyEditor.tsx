@@ -1,28 +1,16 @@
 /**
- * ParodyEditor — Dual-panel editor with scroll-synced highlights and mobile support.
- * Desktop: side-by-side resizable panels.
- * Mobile: vertically stacked with tabs to switch between Original/Parody.
+ * ParodyEditor — Always side-by-side dual-panel editor.
+ * Works on all screen sizes including mobile.
  * Highlight overlay scrolls in sync with the textarea via onScroll mirroring.
+ * Uses a simple 50/50 flex split (no resizable on mobile for touch friendliness).
  */
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { useState, useCallback, useMemo, useRef } from "react";
 
 interface ReplaceAllPopup {
   originalWord: string;
   newWord: string;
   x: number;
   y: number;
-}
-
-function useIsMobile() {
-  const [mobile, setMobile] = useState(window.innerWidth < 768);
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
-    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-  return mobile;
 }
 
 /** A single editor pane with scroll-synced highlight overlay */
@@ -54,9 +42,9 @@ function EditorPane({
   }, []);
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-4 md:px-6 py-2 border-b border-border/40">
-        <span className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <div className="h-full flex flex-col min-w-0">
+      <div className="px-3 sm:px-4 md:px-6 py-2 border-b border-border/40 shrink-0">
+        <span className="text-[11px] sm:text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
       </div>
@@ -64,11 +52,11 @@ function EditorPane({
         {/* Highlight overlay — scrolls in sync with textarea */}
         <div
           ref={highlightRef}
-          className="absolute inset-0 p-4 md:p-6 font-mono text-[14px] leading-7 whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
+          className="absolute inset-0 p-3 sm:p-4 md:p-6 font-mono text-[12px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
           aria-hidden="true"
         >
           {words.map((line, lineIdx) => (
-            <div key={lineIdx} className="min-h-[1.75rem]">
+            <div key={lineIdx} className="min-h-[1.5rem] sm:min-h-[1.75rem]">
               {line.length === 0 && <br />}
               {line.map((word, wordIdx) => {
                 const cls = getDiffClass(side, lineIdx, wordIdx);
@@ -84,7 +72,7 @@ function EditorPane({
                           }
                         : undefined
                     }
-                    className={`inline-block mr-[0.5ch] rounded-[4px] px-0.5 text-transparent ${cls} ${isModified && onWordClick ? "cursor-pointer pointer-events-auto hover:ring-1 hover:ring-primary/40" : ""}`}
+                    className={`inline-block mr-[0.4ch] sm:mr-[0.5ch] rounded-[3px] px-0.5 text-transparent ${cls} ${isModified && onWordClick ? "cursor-pointer pointer-events-auto hover:ring-1 hover:ring-primary/40" : ""}`}
                   >
                     {word}
                   </span>
@@ -93,14 +81,14 @@ function EditorPane({
             </div>
           ))}
         </div>
-        {/* Textarea */}
+        {/* Textarea — user types here, scroll syncs to highlight */}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onScroll={handleScroll}
           spellCheck={false}
-          className="absolute inset-0 w-full h-full p-4 md:p-6 font-mono text-[14px] leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words overflow-auto"
+          className="absolute inset-0 w-full h-full p-3 sm:p-4 md:p-6 font-mono text-[12px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words overflow-auto"
         />
       </div>
     </div>
@@ -112,9 +100,7 @@ export function ParodyEditor() {
   const [parodyText, setParodyText] = useState("");
   const [initialized, setInitialized] = useState(false);
   const [popup, setPopup] = useState<ReplaceAllPopup | null>(null);
-  const [activeTab, setActiveTab] = useState<"original" | "parody">("parody");
   const containerRef = useRef<HTMLDivElement>(null);
-  const isMobile = useIsMobile();
 
   const parseWords = useCallback((text: string): string[][] => {
     return text.split("\n").map((line) =>
@@ -233,118 +219,62 @@ export function ParodyEditor() {
   return (
     <div className="h-full flex flex-col relative" ref={containerRef} onClick={dismissPopup}>
       {/* Toolbar */}
-      <div className="flex items-center gap-2 md:gap-3 px-4 md:px-6 py-2.5 border-b border-border/60 bg-secondary/50 flex-wrap">
+      <div className="flex items-center gap-2 px-3 sm:px-4 md:px-6 py-2 sm:py-2.5 border-b border-border/60 bg-secondary/50 shrink-0">
         <button
           onClick={copyParody}
-          className="px-3 py-1.5 text-[13px] font-medium text-primary rounded-full border border-primary/30 hover:bg-primary/5 transition-colors"
+          className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-primary rounded-full border border-primary/30 hover:bg-primary/5 transition-colors"
         >
           Copy Parody
         </button>
         <button
           onClick={clearAll}
-          className="px-3 py-1.5 text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
+          className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
         >
           Start Over
         </button>
-        <span className="ml-auto text-[13px] text-muted-foreground tabular-nums">
+        <span className="ml-auto text-[11px] sm:text-[13px] text-muted-foreground tabular-nums whitespace-nowrap">
           {modifiedCount} {modifiedCount === 1 ? "change" : "changes"}
         </span>
       </div>
 
-      {/* Mobile: Tab switcher */}
-      {isMobile && (
-        <div className="flex border-b border-border/60">
-          <button
-            onClick={() => setActiveTab("original")}
-            className={`flex-1 py-2.5 text-[13px] font-semibold uppercase tracking-wider transition-colors ${
-              activeTab === "original"
-                ? "text-primary border-b-2 border-primary"
-                : "text-muted-foreground"
-            }`}
-          >
-            Original
-          </button>
-          <button
-            onClick={() => setActiveTab("parody")}
-            className={`flex-1 py-2.5 text-[13px] font-semibold uppercase tracking-wider transition-colors ${
-              activeTab === "parody"
-                ? "text-primary border-b-2 border-primary"
-                : "text-muted-foreground"
-            }`}
-          >
-            Parody
-          </button>
+      {/* Always side-by-side panels */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left: Original */}
+        <div className="flex-1 border-r border-border/60 min-w-0">
+          <EditorPane
+            label="Original"
+            text={originalText}
+            setText={setOriginalText}
+            words={originalWords}
+            getDiffClass={getDiffClass}
+            side="original"
+          />
         </div>
-      )}
-
-      {/* Panels */}
-      <div className="flex-1 overflow-hidden">
-        {isMobile ? (
-          /* Mobile: show one panel at a time */
-          <div className="h-full">
-            {activeTab === "original" ? (
-              <EditorPane
-                label="Original"
-                text={originalText}
-                setText={setOriginalText}
-                words={originalWords}
-                getDiffClass={getDiffClass}
-                side="original"
-              />
-            ) : (
-              <EditorPane
-                label="Parody"
-                text={parodyText}
-                setText={(v) => { setParodyText(v); setPopup(null); }}
-                words={parodyWords}
-                getDiffClass={getDiffClass}
-                side="parody"
-                onWordClick={handleParodyWordClick}
-              />
-            )}
-          </div>
-        ) : (
-          /* Desktop: side-by-side resizable */
-          <ResizablePanelGroup direction="horizontal" className="h-full">
-            <ResizablePanel defaultSize={50} minSize={30}>
-              <EditorPane
-                label="Original"
-                text={originalText}
-                setText={setOriginalText}
-                words={originalWords}
-                getDiffClass={getDiffClass}
-                side="original"
-              />
-            </ResizablePanel>
-
-            <ResizableHandle className="w-px bg-border/60 hover:bg-primary/40 transition-colors data-[resize-handle-active]:bg-primary/60" />
-
-            <ResizablePanel defaultSize={50} minSize={30}>
-              <EditorPane
-                label="Parody"
-                text={parodyText}
-                setText={(v) => { setParodyText(v); setPopup(null); }}
-                words={parodyWords}
-                getDiffClass={getDiffClass}
-                side="parody"
-                onWordClick={handleParodyWordClick}
-              />
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        )}
+        {/* Right: Parody */}
+        <div className="flex-1 min-w-0">
+          <EditorPane
+            label="Parody"
+            text={parodyText}
+            setText={(v) => { setParodyText(v); setPopup(null); }}
+            words={parodyWords}
+            getDiffClass={getDiffClass}
+            side="parody"
+            onWordClick={handleParodyWordClick}
+          />
+        </div>
       </div>
 
       {/* Replace All Popup */}
       {popup && (
         <div
-          className="absolute z-50 bg-popover border border-border rounded-xl shadow-lg p-4 flex flex-col gap-3 min-w-[200px] max-w-[calc(100vw-2rem)]"
+          className="absolute z-50 bg-popover border border-border rounded-xl shadow-lg p-3 sm:p-4 flex flex-col gap-2 sm:gap-3 min-w-[180px] sm:min-w-[200px] max-w-[calc(100vw-2rem)]"
           style={{
-            left: Math.min(popup.x, (containerRef.current?.offsetWidth ?? 300) - 220),
+            left: Math.min(popup.x, (containerRef.current?.offsetWidth ?? 300) - 200),
             top: popup.y + 8,
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <p className="text-[13px] text-foreground leading-snug">
+          <p className="text-[12px] sm:text-[13px] text-foreground leading-snug">
             Replace all{" "}
             <span className="font-semibold text-destructive">"{popup.originalWord}"</span>
             {" "}with{" "}
@@ -353,13 +283,13 @@ export function ParodyEditor() {
           <div className="flex gap-2">
             <button
               onClick={handleReplaceAll}
-              className="flex-1 px-3.5 py-2 text-[13px] font-medium bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity"
+              className="flex-1 px-3 py-1.5 sm:py-2 text-[12px] sm:text-[13px] font-medium bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity"
             >
               Replace All
             </button>
             <button
               onClick={dismissPopup}
-              className="flex-1 px-3.5 py-2 text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
+              className="flex-1 px-3 py-1.5 sm:py-2 text-[12px] sm:text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
             >
               Cancel
             </button>
@@ -388,12 +318,12 @@ function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
 
   return (
     <div className="h-full flex items-center justify-center p-4 md:p-8">
-      <div className="w-full max-w-xl flex flex-col items-center gap-6 md:gap-8">
+      <div className="w-full max-w-xl flex flex-col items-center gap-5 md:gap-8">
         <div className="text-center space-y-2">
-          <h2 className="text-[24px] md:text-[28px] font-semibold tracking-tight text-foreground">
+          <h2 className="text-[22px] sm:text-[24px] md:text-[28px] font-semibold tracking-tight text-foreground">
             Paste your lyrics
           </h2>
-          <p className="text-[14px] md:text-[15px] text-muted-foreground">
+          <p className="text-[13px] sm:text-[14px] md:text-[15px] text-muted-foreground">
             Drop in the original, then edit your parody side by side.
           </p>
         </div>
@@ -402,12 +332,12 @@ function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
           onChange={(e) => setValue(e.target.value)}
           onPaste={handlePasteEvent}
           placeholder="Paste song lyrics here..."
-          className="w-full h-48 md:h-56 bg-background border border-border rounded-xl p-4 md:p-5 font-mono text-[14px] text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all"
+          className="w-full h-44 sm:h-48 md:h-56 bg-background border border-border rounded-xl p-3 sm:p-4 md:p-5 font-mono text-[13px] sm:text-[14px] text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all"
         />
         <button
           onClick={handleSubmit}
           disabled={!value.trim()}
-          className="px-6 py-2.5 bg-primary text-primary-foreground text-[15px] font-medium rounded-full hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+          className="px-5 sm:px-6 py-2 sm:py-2.5 bg-primary text-primary-foreground text-[14px] sm:text-[15px] font-medium rounded-full hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
         >
           Load Lyrics
         </button>
