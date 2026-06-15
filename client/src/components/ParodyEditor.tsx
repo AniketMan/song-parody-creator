@@ -1,18 +1,43 @@
 /**
- * ParodyEditor -- Dual-panel editor with:
+ * ParodyEditor -- Full-featured dual-panel parody writing tool:
+ * - Multiple songs / catalog (localStorage persisted)
+ * - Editable song title
+ * - Bilingual dictionary (Romanized Hindi <-> English) with toggle
+ * - Original-to-parody auto-alignment on left-side edits
  * - Word-level diff highlighting (scroll-synced overlay)
- * - localStorage auto-save
- * - Cross-panel scroll sync (original <-> parody)
+ * - Cross-panel scroll sync
  * - Syllable/meter counter per line
  * - Replace All popup on highlighted words
  *
- * Desktop: side-by-side. Mobile: vertical stack.
+ * Desktop: side-by-side + sidebar. Mobile: vertical stack + collapsible tools.
  */
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { BarChart2, Copy, Trash2 } from "lucide-react";
-
+import {
+  BarChart2,
+  BookOpen,
+  Copy,
+  Plus,
+  Trash2,
+  ChevronDown,
+  X,
+  Eye,
+} from "lucide-react";
 
 // -- Types --
+
+interface DictEntry {
+  id: string;
+  foreign: string;
+  english: string;
+}
+
+interface Song {
+  id: string;
+  title: string;
+  originalText: string;
+  parodyText: string;
+  dictionary: DictEntry[];
+}
 
 interface ReplaceAllPopup {
   originalWord: string;
@@ -21,7 +46,7 @@ interface ReplaceAllPopup {
   y: number;
 }
 
-
+type ToolTab = "meter" | "dictionary";
 
 // -- Hooks --
 
@@ -38,7 +63,6 @@ function useIsMobile() {
 
 // -- Utilities --
 
-/** Estimate syllable count for a line of text */
 function countSyllables(line: string): number {
   if (!line) return 0;
   const words = line.toLowerCase().replace(/[^a-z\s]/g, "").split(/\s+/);
@@ -57,32 +81,107 @@ function countSyllables(line: string): number {
   return count;
 }
 
+/** Convert text using dictionary mappings (Hindi <-> English) */
+function convertText(
+  text: string,
+  dictionary: DictEntry[],
+  toEnglish: boolean
+): string {
+  if (!text || dictionary.length === 0) return text;
+  const lines = text.split("\n");
+  return lines
+    .map((line) => {
+      const tokens = line.split(/(\s+|[.,!?;:'"()\-])/);
+      return tokens
+        .map((token) => {
+          if (!token.trim() || /^[.,!?;:'"()\-]+$/.test(token)) return token;
+          const clean = token.toLowerCase();
+          if (toEnglish) {
+            const match = dictionary.find(
+              (d) => d.foreign && d.foreign.toLowerCase() === clean
+            );
+            if (match && match.english) {
+              const isTitleCase =
+                token[0] === token[0].toUpperCase() && token.length > 1;
+              let rep = match.english;
+              if (isTitleCase) rep = rep[0].toUpperCase() + rep.slice(1);
+              return rep;
+            }
+          } else {
+            const match = dictionary.find(
+              (d) => d.english && d.english.toLowerCase() === clean
+            );
+            if (match && match.foreign) {
+              const isTitleCase =
+                token[0] === token[0].toUpperCase() && token.length > 1;
+              let rep = match.foreign;
+              if (isTitleCase) rep = rep[0].toUpperCase() + rep.slice(1);
+              return rep;
+            }
+          }
+          return token;
+        })
+        .join("");
+    })
+    .join("\n");
+}
+
+/** Auto-align parody when original changes */
+function alignParody(
+  newOriginal: string,
+  oldOriginal: string,
+  currentParody: string
+): string {
+  const newLines = newOriginal.split("\n");
+  const oldLines = oldOriginal.split("\n");
+  const parodyLines = currentParody.split("\n");
+
+  const aligned = newLines.map((line, idx) => {
+    const oldLine = oldLines[idx];
+    const parodyLine = parodyLines[idx];
+    // If no parody line exists yet, use the new original line
+    if (parodyLine === undefined) return line;
+    // If parody was untouched (same as old original), update it to match new original
+    if (parodyLine.trim() === "" || parodyLine === oldLine) return line;
+    // Otherwise keep the user's parody edits
+    return parodyLine;
+  });
+
+  return aligned.join("\n");
+}
 
 // -- Storage --
 
-const STORAGE_KEY = "parody_creator_state_v1";
+const STORAGE_KEY = "parody_creator_songs_v2";
 
-interface SavedState {
-  originalText: string;
-  parodyText: string;
-}
-
-function loadState(): SavedState | null {
+function loadSongs(): Song[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    return [];
   } catch {
-    return null;
+    return [];
   }
 }
 
-function saveState(state: SavedState) {
+function saveSongs(songs: Song[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(songs));
   } catch {
-    // Storage restricted -- silently fail
+    // Storage restricted
   }
+}
+
+function createEmptySong(): Song {
+  return {
+    id: "song-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+    title: "Untitled Song",
+    originalText: "",
+    parodyText: "",
+    dictionary: [],
+  };
 }
 
 // -- EditorPane --
@@ -102,7 +201,11 @@ function EditorPane({
   text: string;
   setText: (v: string) => void;
   words: string[][];
-  getDiffClass: (side: "original" | "parody", lineIdx: number, wordIdx: number) => string;
+  getDiffClass: (
+    side: "original" | "parody",
+    lineIdx: number,
+    wordIdx: number
+  ) => string;
   side: "original" | "parody";
   onWordClick?: (e: React.MouseEvent, lineIdx: number, wordIdx: number) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -122,7 +225,6 @@ function EditorPane({
     onScroll();
   }, [syncHighlight, onScroll]);
 
-  // Keep highlight in sync when text changes (content reflow)
   useEffect(() => {
     syncHighlight();
   }, [text, syncHighlight]);
@@ -185,15 +287,23 @@ function EditorPane({
 // -- Main Component --
 
 export function ParodyEditor() {
-  // Load persisted state
-  const saved = useMemo(() => loadState(), []);
+  // Load songs from storage
+  const initialSongs = useMemo(() => {
+    const stored = loadSongs();
+    return stored.length > 0 ? stored : [createEmptySong()];
+  }, []);
 
-  const [originalText, setOriginalText] = useState(saved?.originalText ?? "");
-  const [parodyText, setParodyText] = useState(saved?.parodyText ?? "");
-  const [initialized, setInitialized] = useState(!!saved?.originalText);
+  const [songs, setSongs] = useState<Song[]>(initialSongs);
+  const [currentSongId, setCurrentSongId] = useState(initialSongs[0].id);
   const [popup, setPopup] = useState<ReplaceAllPopup | null>(null);
-  // Tool panel visibility (desktop: always visible sidebar, mobile: collapsible)
+  const [isEnglishMode, setIsEnglishMode] = useState(false);
+  const [activeTab, setActiveTab] = useState<ToolTab>("meter");
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+
+  // Dictionary manual entry
+  const [newForeign, setNewForeign] = useState("");
+  const [newEnglish, setNewEnglish] = useState("");
 
   const containerRef = useRef<HTMLDivElement>(null);
   const originalRef = useRef<HTMLTextAreaElement>(null);
@@ -201,10 +311,105 @@ export function ParodyEditor() {
   const scrollLockRef = useRef<string | null>(null);
   const isMobile = useIsMobile();
 
-  // Persist state on change
+  const currentSong = songs.find((s) => s.id === currentSongId) || songs[0];
+
+  // Persist songs on change
   useEffect(() => {
-    saveState({ originalText, parodyText });
-  }, [originalText, parodyText]);
+    saveSongs(songs);
+  }, [songs]);
+
+  // -- Song management --
+
+  const updateCurrentSong = useCallback(
+    (updater: (song: Song) => Song) => {
+      setSongs((prev) =>
+        prev.map((s) => (s.id === currentSongId ? updater(s) : s))
+      );
+    },
+    [currentSongId]
+  );
+
+  const createNewSong = useCallback(() => {
+    const newSong = createEmptySong();
+    setSongs((prev) => [newSong, ...prev]);
+    setCurrentSongId(newSong.id);
+    setIsEnglishMode(false);
+    setCatalogOpen(false);
+  }, []);
+
+  const deleteSong = useCallback(
+    (id: string) => {
+      setSongs((prev) => {
+        const filtered = prev.filter((s) => s.id !== id);
+        if (filtered.length === 0) {
+          const fresh = createEmptySong();
+          setCurrentSongId(fresh.id);
+          return [fresh];
+        }
+        if (id === currentSongId) {
+          setCurrentSongId(filtered[0].id);
+        }
+        return filtered;
+      });
+    },
+    [currentSongId]
+  );
+
+  // -- Text handling with auto-alignment and English mode --
+
+  const handleOriginalChange = useCallback(
+    (value: string) => {
+      updateCurrentSong((song) => {
+        let rawValue = value;
+        // If in English mode, convert back to Hindi before storing
+        if (isEnglishMode) {
+          rawValue = convertText(value, song.dictionary, false);
+        }
+        const alignedParody = alignParody(
+          rawValue,
+          song.originalText,
+          song.parodyText
+        );
+        return { ...song, originalText: rawValue, parodyText: alignedParody };
+      });
+    },
+    [updateCurrentSong, isEnglishMode]
+  );
+
+  const handleParodyChange = useCallback(
+    (value: string) => {
+      updateCurrentSong((song) => {
+        let rawValue = value;
+        if (isEnglishMode) {
+          rawValue = convertText(value, song.dictionary, false);
+        }
+        return { ...song, parodyText: rawValue };
+      });
+      setPopup(null);
+    },
+    [updateCurrentSong, isEnglishMode]
+  );
+
+  // Display text (possibly translated to English)
+  const displayOriginal = useMemo(
+    () =>
+      isEnglishMode
+        ? convertText(
+            currentSong.originalText,
+            currentSong.dictionary,
+            true
+          )
+        : currentSong.originalText,
+    [isEnglishMode, currentSong.originalText, currentSong.dictionary]
+  );
+
+  const displayParody = useMemo(
+    () =>
+      isEnglishMode
+        ? convertText(currentSong.parodyText, currentSong.dictionary, true)
+        : currentSong.parodyText,
+    [isEnglishMode, currentSong.parodyText, currentSong.dictionary]
+  );
 
   // -- Parsing --
 
@@ -214,14 +419,23 @@ export function ParodyEditor() {
     );
   }, []);
 
-  const originalWords = useMemo(() => parseWords(originalText), [originalText, parseWords]);
-  const parodyWords = useMemo(() => parseWords(parodyText), [parodyText, parseWords]);
+  const originalWords = useMemo(
+    () => parseWords(displayOriginal),
+    [displayOriginal, parseWords]
+  );
+  const parodyWords = useMemo(
+    () => parseWords(displayParody),
+    [displayParody, parseWords]
+  );
 
   const modifiedCount = useMemo(() => {
     let count = 0;
     const maxLines = Math.max(originalWords.length, parodyWords.length);
     for (let l = 0; l < maxLines; l++) {
-      const maxW = Math.max(originalWords[l]?.length ?? 0, parodyWords[l]?.length ?? 0);
+      const maxW = Math.max(
+        originalWords[l]?.length ?? 0,
+        parodyWords[l]?.length ?? 0
+      );
       for (let w = 0; w < maxW; w++) {
         const orig = originalWords[l]?.[w] ?? "";
         const paro = parodyWords[l]?.[w] ?? "";
@@ -233,28 +447,38 @@ export function ParodyEditor() {
 
   // -- Handlers --
 
-  const handlePaste = useCallback((text: string) => {
-    setOriginalText(text);
-    setParodyText(text);
-    setInitialized(true);
-  }, []);
+  const handlePaste = useCallback(
+    (text: string) => {
+      updateCurrentSong((song) => ({
+        ...song,
+        originalText: text,
+        parodyText: text,
+      }));
+    },
+    [updateCurrentSong]
+  );
 
   const copyParody = useCallback(() => {
-    navigator.clipboard.writeText(parodyText);
-  }, [parodyText]);
+    navigator.clipboard.writeText(currentSong.parodyText);
+  }, [currentSong.parodyText]);
 
-  const clearAll = useCallback(() => {
-    setOriginalText("");
-    setParodyText("");
-    setInitialized(false);
+  const clearCurrent = useCallback(() => {
+    updateCurrentSong((song) => ({
+      ...song,
+      originalText: "",
+      parodyText: "",
+    }));
     setPopup(null);
-    try { localStorage.removeItem(STORAGE_KEY); } catch {}
-  }, []);
+  }, [updateCurrentSong]);
 
   // -- Diff highlighting --
 
   const getDiffClass = useCallback(
-    (side: "original" | "parody", lineIdx: number, wordIdx: number): string => {
+    (
+      side: "original" | "parody",
+      lineIdx: number,
+      wordIdx: number
+    ): string => {
       const orig = originalWords[lineIdx]?.[wordIdx] ?? "";
       const paro = parodyWords[lineIdx]?.[wordIdx] ?? "";
       if (orig === paro) return "";
@@ -264,7 +488,7 @@ export function ParodyEditor() {
     [originalWords, parodyWords]
   );
 
-  // -- Replace All popup (click highlighted word) --
+  // -- Replace All popup --
 
   const handleParodyWordClick = useCallback(
     (e: React.MouseEvent, lineIdx: number, wordIdx: number) => {
@@ -292,7 +516,7 @@ export function ParodyEditor() {
     if (!popup) return;
     const { originalWord, newWord } = popup;
 
-    const newParodyLines = parodyText.split("\n").map((line, lineIdx) => {
+    const newParodyLines = displayParody.split("\n").map((line, lineIdx) => {
       const words = line.split(/(\s+)/);
       const origLine = originalWords[lineIdx] ?? [];
       let origWordIdx = 0;
@@ -306,7 +530,8 @@ export function ParodyEditor() {
             correspondingOrig.toLowerCase() === originalWord.toLowerCase() &&
             token.toLowerCase() === originalWord.toLowerCase()
           ) {
-            if (correspondingOrig === correspondingOrig.toUpperCase()) return newWord.toUpperCase();
+            if (correspondingOrig === correspondingOrig.toUpperCase())
+              return newWord.toUpperCase();
             if (correspondingOrig[0] === correspondingOrig[0].toUpperCase())
               return newWord[0].toUpperCase() + newWord.slice(1);
             return newWord;
@@ -316,9 +541,21 @@ export function ParodyEditor() {
         .join("");
     });
 
-    setParodyText(newParodyLines.join("\n"));
+    const newText = newParodyLines.join("\n");
+    // If in English mode, convert back before storing
+    const stored = isEnglishMode
+      ? convertText(newText, currentSong.dictionary, false)
+      : newText;
+    updateCurrentSong((song) => ({ ...song, parodyText: stored }));
     setPopup(null);
-  }, [popup, parodyText, originalWords]);
+  }, [
+    popup,
+    displayParody,
+    originalWords,
+    isEnglishMode,
+    currentSong.dictionary,
+    updateCurrentSong,
+  ]);
 
   const dismissPopup = useCallback(() => setPopup(null), []);
 
@@ -330,7 +567,9 @@ export function ParodyEditor() {
     if (originalRef.current && parodyRef.current) {
       parodyRef.current.scrollTop = originalRef.current.scrollTop;
     }
-    setTimeout(() => { scrollLockRef.current = null; }, 50);
+    setTimeout(() => {
+      scrollLockRef.current = null;
+    }, 50);
   }, []);
 
   const handleParodyScroll = useCallback(() => {
@@ -339,159 +578,511 @@ export function ParodyEditor() {
     if (parodyRef.current && originalRef.current) {
       originalRef.current.scrollTop = parodyRef.current.scrollTop;
     }
-    setTimeout(() => { scrollLockRef.current = null; }, 50);
+    setTimeout(() => {
+      scrollLockRef.current = null;
+    }, 50);
   }, []);
 
+  // -- Dictionary management --
 
+  const addDictEntry = useCallback(() => {
+    if (!newForeign.trim() || !newEnglish.trim()) return;
+    const entry: DictEntry = {
+      id: "d-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
+      foreign: newForeign.trim().toLowerCase(),
+      english: newEnglish.trim().toLowerCase(),
+    };
+    updateCurrentSong((song) => ({
+      ...song,
+      dictionary: [...song.dictionary, entry],
+    }));
+    setNewForeign("");
+    setNewEnglish("");
+  }, [newForeign, newEnglish, updateCurrentSong]);
+
+  const removeDictEntry = useCallback(
+    (id: string) => {
+      updateCurrentSong((song) => ({
+        ...song,
+        dictionary: song.dictionary.filter((d) => d.id !== id),
+      }));
+    },
+    [updateCurrentSong]
+  );
 
   // -- Syllable data --
 
   const syllableData = useMemo(() => {
-    const origLines = originalText.split("\n");
-    const parodyLines = parodyText.split("\n");
+    const origLines = displayOriginal.split("\n");
+    const parodyLines = displayParody.split("\n");
     const maxLen = Math.max(origLines.length, parodyLines.length);
-    const data: { origLine: string; parodyLine: string; origSyl: number; parodySyl: number; match: boolean }[] = [];
+    const data: {
+      origLine: string;
+      parodyLine: string;
+      origSyl: number;
+      parodySyl: number;
+      match: boolean;
+    }[] = [];
     for (let i = 0; i < maxLen; i++) {
       const oL = origLines[i] ?? "";
       const pL = parodyLines[i] ?? "";
       const oS = countSyllables(oL);
       const pS = countSyllables(pL);
-      data.push({ origLine: oL, parodyLine: pL, origSyl: oS, parodySyl: pS, match: oS === pS });
+      data.push({
+        origLine: oL,
+        parodyLine: pL,
+        origSyl: oS,
+        parodySyl: pS,
+        match: oS === pS,
+      });
     }
     return data;
-  }, [originalText, parodyText]);
+  }, [displayOriginal, displayParody]);
 
-  // -- Render --
+  // -- Render: Paste prompt if no text --
+
+  const initialized = currentSong.originalText.trim().length > 0;
 
   if (!initialized) {
-    return <PastePrompt onPaste={handlePaste} />;
+    return (
+      <div className="h-full flex flex-col">
+        {/* Song catalog bar */}
+        <CatalogBar
+          songs={songs}
+          currentSongId={currentSongId}
+          setCurrentSongId={(id) => {
+            setCurrentSongId(id);
+            setIsEnglishMode(false);
+          }}
+          createNewSong={createNewSong}
+          deleteSong={deleteSong}
+          catalogOpen={catalogOpen}
+          setCatalogOpen={setCatalogOpen}
+          isMobile={isMobile}
+        />
+        <PastePrompt onPaste={handlePaste} />
+      </div>
+    );
   }
 
   return (
-    <div className="h-full flex relative" ref={containerRef} onClick={dismissPopup}>
-      {/* Main editor area */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        {/* Toolbar */}
-        <div className="flex items-center gap-2 px-3 sm:px-4 md:px-6 py-2 sm:py-2.5 border-b border-border/60 bg-secondary/50 shrink-0">
-          <button
-            onClick={copyParody}
-            className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-primary rounded-full border border-primary/30 hover:bg-primary/5 transition-colors"
-            title="Copy parody text to clipboard"
-          >
-            <span className="hidden sm:inline">Copy Parody</span>
-            <Copy size={14} className="sm:hidden" />
-          </button>
-          <button
-            onClick={clearAll}
-            className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
-            title="Clear everything and start over"
-          >
-            <span className="hidden sm:inline">Start Over</span>
-            <Trash2 size={14} className="sm:hidden" />
-          </button>
-          {isMobile && (
-            <button
-              onClick={() => setToolsOpen(!toolsOpen)}
-              className={`px-2.5 py-1 text-[12px] font-medium rounded-full border transition-colors ${toolsOpen ? "bg-primary text-primary-foreground border-primary" : "text-muted-foreground border-border hover:bg-secondary"}`}
-              title="Toggle tools panel"
-            >
-              Tools
-            </button>
-          )}
-          <span className="ml-auto text-[11px] sm:text-[13px] text-muted-foreground tabular-nums whitespace-nowrap">
-            {modifiedCount} {modifiedCount === 1 ? "change" : "changes"}
-          </span>
-        </div>
+    <div className="h-full flex flex-col" onClick={dismissPopup}>
+      {/* Song catalog + title bar */}
+      <CatalogBar
+        songs={songs}
+        currentSongId={currentSongId}
+        setCurrentSongId={(id) => {
+          setCurrentSongId(id);
+          setIsEnglishMode(false);
+        }}
+        createNewSong={createNewSong}
+        deleteSong={deleteSong}
+        catalogOpen={catalogOpen}
+        setCatalogOpen={setCatalogOpen}
+        isMobile={isMobile}
+      />
 
-        {/* Panels */}
-        <div className={`flex-1 flex overflow-hidden min-h-0 ${isMobile ? "flex-col" : "flex-row"}`}>
-          <div className={`min-w-0 min-h-0 ${isMobile ? "flex-1 border-b border-border/60" : "flex-1 border-r border-border/60"}`}>
-            <EditorPane
-              label="Original"
-              text={originalText}
-              setText={setOriginalText}
-              words={originalWords}
-              getDiffClass={getDiffClass}
-              side="original"
-              textareaRef={originalRef}
-              onScroll={handleOriginalScroll}
-            />
-          </div>
-          <div className="flex-1 min-w-0 min-h-0">
-            <EditorPane
-              label="Parody"
-              text={parodyText}
-              setText={(v) => { setParodyText(v); setPopup(null); }}
-              words={parodyWords}
-              getDiffClass={getDiffClass}
-              side="parody"
-              onWordClick={handleParodyWordClick}
-              textareaRef={parodyRef}
-              onScroll={handleParodyScroll}
-            />
-          </div>
-        </div>
+      {/* Title + controls bar */}
+      <div className="flex items-center gap-2 px-3 sm:px-4 md:px-6 py-2 border-b border-border/60 bg-secondary/30 shrink-0">
+        {/* Editable title */}
+        <input
+          type="text"
+          value={currentSong.title}
+          onChange={(e) =>
+            updateCurrentSong((song) => ({ ...song, title: e.target.value }))
+          }
+          className="bg-transparent text-[13px] sm:text-[14px] font-semibold text-foreground focus:outline-none focus:border-b focus:border-primary px-1 py-0.5 min-w-0 flex-shrink"
+          placeholder="Song title..."
+        />
+
+        {/* English toggle */}
+        <button
+          onClick={() => setIsEnglishMode(!isEnglishMode)}
+          className={`flex items-center gap-1 px-2.5 py-1 text-[11px] sm:text-[12px] font-medium rounded-full border transition-colors shrink-0 ${
+            isEnglishMode
+              ? "bg-primary text-primary-foreground border-primary"
+              : "text-muted-foreground border-border hover:bg-secondary"
+          }`}
+          title="Toggle English translation view"
+        >
+          <Eye size={12} />
+          <span className="hidden sm:inline">
+            {isEnglishMode ? "English" : "Hindi"}
+          </span>
+        </button>
+
+        <div className="flex-1" />
+
+        {/* Actions */}
+        <button
+          onClick={copyParody}
+          className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-primary rounded-full border border-primary/30 hover:bg-primary/5 transition-colors"
+          title="Copy parody text"
+        >
+          <span className="hidden sm:inline">Copy Parody</span>
+          <Copy size={14} className="sm:hidden" />
+        </button>
+        <button
+          onClick={clearCurrent}
+          className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
+          title="Clear lyrics"
+        >
+          <span className="hidden sm:inline">Clear</span>
+          <Trash2 size={14} className="sm:hidden" />
+        </button>
+        {isMobile && (
+          <button
+            onClick={() => setToolsOpen(!toolsOpen)}
+            className={`px-2.5 py-1 text-[12px] font-medium rounded-full border transition-colors ${toolsOpen ? "bg-primary text-primary-foreground border-primary" : "text-muted-foreground border-border hover:bg-secondary"}`}
+          >
+            Tools
+          </button>
+        )}
+        <span className="text-[11px] sm:text-[13px] text-muted-foreground tabular-nums whitespace-nowrap">
+          {modifiedCount} {modifiedCount === 1 ? "change" : "changes"}
+        </span>
       </div>
 
-      {/* Tools sidebar (desktop: always visible, mobile: overlay) */}
-      {(isMobile ? toolsOpen : true) && (
-        <div className={`${isMobile ? "absolute inset-0 z-40 bg-background/95 backdrop-blur-sm" : "w-72 xl:w-80 border-l border-border/60 shrink-0"} flex flex-col`}>
-          {isMobile && (
-            <div className="flex items-center justify-between px-4 py-2 border-b border-border/60">
-              <span className="text-[13px] font-semibold">Tools</span>
-              <button onClick={() => setToolsOpen(false)} className="text-muted-foreground text-[13px] hover:text-foreground">
-                Done
-              </button>
+      {/* Main content */}
+      <div className="flex-1 flex overflow-hidden min-h-0 relative" ref={containerRef}>
+        {/* Editor panels */}
+        <div className="flex-1 flex min-w-0 min-h-0">
+          <div
+            className={`flex overflow-hidden min-h-0 flex-1 ${isMobile ? "flex-col" : "flex-row"}`}
+          >
+            <div
+              className={`min-w-0 min-h-0 ${isMobile ? "flex-1 border-b border-border/60" : "flex-1 border-r border-border/60"}`}
+            >
+              <EditorPane
+                label={isEnglishMode ? "Original (English)" : "Original (Hindi)"}
+                text={displayOriginal}
+                setText={handleOriginalChange}
+                words={originalWords}
+                getDiffClass={getDiffClass}
+                side="original"
+                textareaRef={originalRef}
+                onScroll={handleOriginalScroll}
+              />
             </div>
-          )}
-
-          {/* Meter content */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            <MeterPanel data={syllableData} />
+            <div className="flex-1 min-w-0 min-h-0">
+              <EditorPane
+                label="Parody"
+                text={displayParody}
+                setText={handleParodyChange}
+                words={parodyWords}
+                getDiffClass={getDiffClass}
+                side="parody"
+                onWordClick={handleParodyWordClick}
+                textareaRef={parodyRef}
+                onScroll={handleParodyScroll}
+              />
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Replace All Popup */}
-      {popup && (
-        <div
-          className="absolute z-50 bg-popover border border-border rounded-xl shadow-lg p-3 sm:p-4 flex flex-col gap-2 sm:gap-3 min-w-[180px] sm:min-w-[200px] max-w-[calc(100vw-2rem)]"
-          style={{
-            left: Math.min(popup.x, (containerRef.current?.offsetWidth ?? 300) - 200),
-            top: popup.y + 8,
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <p className="text-[12px] sm:text-[13px] text-foreground leading-snug">
-            Replace all{" "}
-            <span className="font-semibold text-destructive">"{popup.originalWord}"</span>
-            {" "}with{" "}
-            <span className="font-semibold text-primary">"{popup.newWord}"</span>?
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={handleReplaceAll}
-              className="flex-1 px-3 py-1.5 sm:py-2 text-[12px] sm:text-[13px] font-medium bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity"
-            >
-              Replace All
-            </button>
-            <button
-              onClick={dismissPopup}
-              className="flex-1 px-3 py-1.5 sm:py-2 text-[12px] sm:text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
-            >
-              Cancel
-            </button>
+        {/* Tools sidebar */}
+        {(isMobile ? toolsOpen : true) && (
+          <div
+            className={`${isMobile ? "absolute inset-0 z-40 bg-background/95 backdrop-blur-sm" : "w-72 xl:w-80 border-l border-border/60 shrink-0"} flex flex-col`}
+          >
+            {isMobile && (
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border/60">
+                <span className="text-[13px] font-semibold">Tools</span>
+                <button
+                  onClick={() => setToolsOpen(false)}
+                  className="text-muted-foreground text-[13px] hover:text-foreground"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+
+            {/* Tab switcher */}
+            <div className="flex border-b border-border/60 shrink-0">
+              <button
+                onClick={() => setActiveTab("meter")}
+                className={`flex-1 py-2.5 text-[11px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors ${activeTab === "meter" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <BarChart2 size={12} /> Meter
+              </button>
+              <button
+                onClick={() => setActiveTab("dictionary")}
+                className={`flex-1 py-2.5 text-[11px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors ${activeTab === "dictionary" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <BookOpen size={12} /> Dictionary
+              </button>
+            </div>
+
+            {/* Tab content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {activeTab === "meter" && <MeterPanel data={syllableData} />}
+              {activeTab === "dictionary" && (
+                <DictionaryPanel
+                  dictionary={currentSong.dictionary}
+                  newForeign={newForeign}
+                  setNewForeign={setNewForeign}
+                  newEnglish={newEnglish}
+                  setNewEnglish={setNewEnglish}
+                  addEntry={addDictEntry}
+                  removeEntry={removeDictEntry}
+                />
+              )}
+            </div>
           </div>
+        )}
+
+        {/* Replace All Popup */}
+        {popup && (
+          <div
+            className="absolute z-50 bg-popover border border-border rounded-xl shadow-lg p-3 sm:p-4 flex flex-col gap-2 sm:gap-3 min-w-[180px] sm:min-w-[200px] max-w-[calc(100vw-2rem)]"
+            style={{
+              left: Math.min(
+                popup.x,
+                (containerRef.current?.offsetWidth ?? 300) - 200
+              ),
+              top: popup.y + 8,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-[12px] sm:text-[13px] text-foreground leading-snug">
+              Replace all{" "}
+              <span className="font-semibold text-destructive">
+                &quot;{popup.originalWord}&quot;
+              </span>{" "}
+              with{" "}
+              <span className="font-semibold text-primary">
+                &quot;{popup.newWord}&quot;
+              </span>
+              ?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleReplaceAll}
+                className="flex-1 px-3 py-1.5 sm:py-2 text-[12px] sm:text-[13px] font-medium bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity"
+              >
+                Replace All
+              </button>
+              <button
+                onClick={dismissPopup}
+                className="flex-1 px-3 py-1.5 sm:py-2 text-[12px] sm:text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// -- Catalog Bar --
+
+function CatalogBar({
+  songs,
+  currentSongId,
+  setCurrentSongId,
+  createNewSong,
+  deleteSong,
+  catalogOpen,
+  setCatalogOpen,
+  isMobile,
+}: {
+  songs: Song[];
+  currentSongId: string;
+  setCurrentSongId: (id: string) => void;
+  createNewSong: () => void;
+  deleteSong: (id: string) => void;
+  catalogOpen: boolean;
+  setCatalogOpen: (v: boolean) => void;
+  isMobile: boolean;
+}) {
+  const currentSong = songs.find((s) => s.id === currentSongId);
+
+  return (
+    <div className="relative shrink-0">
+      <div className="flex items-center gap-2 px-3 sm:px-4 md:px-6 py-1.5 border-b border-border/40 bg-secondary/20">
+        <button
+          onClick={() => setCatalogOpen(!catalogOpen)}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium text-foreground rounded-lg hover:bg-secondary transition-colors"
+        >
+          <span className="truncate max-w-[150px] sm:max-w-[200px]">
+            {currentSong?.title || "Untitled"}
+          </span>
+          <ChevronDown
+            size={12}
+            className={`transition-transform ${catalogOpen ? "rotate-180" : ""}`}
+          />
+        </button>
+        <button
+          onClick={createNewSong}
+          className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-primary rounded-lg hover:bg-primary/5 transition-colors"
+          title="New song"
+        >
+          <Plus size={12} />
+          {!isMobile && <span>New</span>}
+        </button>
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          {songs.length} {songs.length === 1 ? "song" : "songs"}
+        </span>
+      </div>
+
+      {/* Dropdown catalog */}
+      {catalogOpen && (
+        <div className="absolute top-full left-0 right-0 z-50 bg-popover border-b border-border shadow-lg max-h-[240px] overflow-y-auto">
+          {songs.map((song) => (
+            <div
+              key={song.id}
+              className={`flex items-center gap-2 px-4 sm:px-6 py-2.5 cursor-pointer hover:bg-secondary/50 transition-colors ${song.id === currentSongId ? "bg-primary/5 border-l-2 border-primary" : ""}`}
+              onClick={() => {
+                setCurrentSongId(song.id);
+                setCatalogOpen(false);
+              }}
+            >
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] font-medium text-foreground truncate">
+                  {song.title || "Untitled"}
+                </p>
+                <p className="text-[11px] text-muted-foreground truncate">
+                  {song.originalText
+                    ? song.originalText.split("\n")[0].slice(0, 40) + "..."
+                    : "Empty"}
+                </p>
+              </div>
+              {songs.length > 1 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteSong(song.id);
+                  }}
+                  className="p-1 text-muted-foreground hover:text-destructive transition-colors"
+                  title="Delete song"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
+// -- Dictionary Panel --
+
+function DictionaryPanel({
+  dictionary,
+  newForeign,
+  setNewForeign,
+  newEnglish,
+  setNewEnglish,
+  addEntry,
+  removeEntry,
+}: {
+  dictionary: DictEntry[];
+  newForeign: string;
+  setNewForeign: (v: string) => void;
+  newEnglish: string;
+  setNewEnglish: (v: string) => void;
+  addEntry: () => void;
+  removeEntry: (id: string) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
+          <BookOpen size={14} className="text-primary" /> Hindi-English Glossary
+        </h3>
+        <p className="text-[12px] text-muted-foreground leading-relaxed">
+          Map Romanized Hindi words to English. Toggle the &quot;English&quot;
+          button to view translated lyrics.
+        </p>
+      </div>
+
+      {/* Entry list */}
+      <div className="space-y-1.5 max-h-[40vh] overflow-y-auto hide-scrollbar">
+        {dictionary.length === 0 && (
+          <p className="text-[12px] text-muted-foreground text-center py-4">
+            No entries yet. Add words below.
+          </p>
+        )}
+        {dictionary.map((entry) => (
+          <div
+            key={entry.id}
+            className="flex items-center justify-between px-3 py-2 rounded-lg border border-border/60 bg-secondary/30 text-[12px]"
+          >
+            <div className="flex items-center gap-2 font-mono min-w-0">
+              <span className="text-primary font-semibold truncate">
+                {entry.foreign}
+              </span>
+              <span className="text-muted-foreground shrink-0">=</span>
+              <span className="text-foreground/80 truncate">
+                {entry.english}
+              </span>
+            </div>
+            <button
+              onClick={() => removeEntry(entry.id)}
+              className="p-0.5 text-muted-foreground hover:text-destructive transition-colors shrink-0"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Add entry form */}
+      <div className="space-y-2 border-t border-border/60 pt-3">
+        <span className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+          Add Mapping
+        </span>
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            type="text"
+            value={newForeign}
+            onChange={(e) => setNewForeign(e.target.value)}
+            placeholder="Hindi word"
+            className="border border-border rounded-lg px-2.5 py-1.5 text-[12px] bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addEntry();
+            }}
+          />
+          <input
+            type="text"
+            value={newEnglish}
+            onChange={(e) => setNewEnglish(e.target.value)}
+            placeholder="English"
+            className="border border-border rounded-lg px-2.5 py-1.5 text-[12px] bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addEntry();
+            }}
+          />
+        </div>
+        <button
+          onClick={addEntry}
+          disabled={!newForeign.trim() || !newEnglish.trim()}
+          className="w-full py-1.5 bg-primary text-primary-foreground text-[12px] font-medium rounded-full hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          + Add
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // -- Meter Panel --
 
-function MeterPanel({ data }: { data: { origLine: string; parodyLine: string; origSyl: number; parodySyl: number; match: boolean }[] }) {
+function MeterPanel({
+  data,
+}: {
+  data: {
+    origLine: string;
+    parodyLine: string;
+    origSyl: number;
+    parodySyl: number;
+    match: boolean;
+  }[];
+}) {
   return (
     <div className="space-y-3">
       <div className="space-y-1">
@@ -499,7 +1090,8 @@ function MeterPanel({ data }: { data: { origLine: string; parodyLine: string; or
           <BarChart2 size={14} className="text-primary" /> Syllable Meter
         </h3>
         <p className="text-[12px] text-muted-foreground leading-relaxed">
-          Compare syllable counts line-by-line. Green means your parody matches the original rhythm.
+          Compare syllable counts line-by-line. Green means your parody matches
+          the original rhythm.
         </p>
       </div>
 
@@ -559,7 +1151,7 @@ function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
   };
 
   return (
-    <div className="h-full flex items-center justify-center p-4 md:p-8">
+    <div className="flex-1 flex items-center justify-center p-4 md:p-8">
       <div className="w-full max-w-xl flex flex-col items-center gap-5 md:gap-8">
         <div className="text-center space-y-2">
           <h2 className="text-[22px] sm:text-[24px] md:text-[28px] font-semibold tracking-tight text-foreground">
