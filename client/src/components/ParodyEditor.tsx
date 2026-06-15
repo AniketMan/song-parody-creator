@@ -21,6 +21,8 @@ import {
   ChevronDown,
   X,
   Eye,
+  Loader2,
+  Zap,
 } from "lucide-react";
 
 // -- Types --
@@ -184,6 +186,54 @@ function createEmptySong(): Song {
   };
 }
 
+// -- Auto-translation via MyMemory API --
+
+async function autoTranslateWords(
+  text: string,
+  existingDict: DictEntry[]
+): Promise<DictEntry[]> {
+  const allWords = text
+    .split(/[\n\s]+/)
+    .map((w) => w.replace(/[.,!?;:'"()\-]/g, "").toLowerCase())
+    .filter((w) => w.length > 0);
+  const uniqueWords = [...new Set(allWords)];
+  const existingForeign = new Set(existingDict.map((d) => d.foreign.toLowerCase()));
+  const wordsToTranslate = uniqueWords.filter((w) => !existingForeign.has(w));
+
+  if (wordsToTranslate.length === 0) return existingDict;
+
+  const newEntries: DictEntry[] = [];
+  const chunkSize = 15;
+
+  for (let i = 0; i < wordsToTranslate.length; i += chunkSize) {
+    const chunk = wordsToTranslate.slice(i, i + chunkSize);
+    const joined = chunk.join(" | ");
+    try {
+      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(joined)}&langpair=hi|en`;
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const translated: string = data?.responseData?.translatedText || "";
+      const translatedParts = translated.split(" | ").map((p: string) => p.trim().toLowerCase());
+
+      chunk.forEach((word, idx) => {
+        const eng = translatedParts[idx];
+        if (eng && eng !== word && eng.length > 0) {
+          newEntries.push({
+            id: "d-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
+            foreign: word,
+            english: eng,
+          });
+        }
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return [...existingDict, ...newEntries];
+}
+
 // -- EditorPane --
 
 function EditorPane({
@@ -304,6 +354,7 @@ export function ParodyEditor() {
   // Dictionary manual entry
   const [newForeign, setNewForeign] = useState("");
   const [newEnglish, setNewEnglish] = useState("");
+  const [isTranslating, setIsTranslating] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const originalRef = useRef<HTMLTextAreaElement>(null);
@@ -454,9 +505,26 @@ export function ParodyEditor() {
         originalText: text,
         parodyText: text,
       }));
+      // Auto-translate in background
+      setIsTranslating(true);
+      autoTranslateWords(text, currentSong.dictionary)
+        .then((newDict) => {
+          updateCurrentSong((song) => ({ ...song, dictionary: newDict }));
+        })
+        .finally(() => setIsTranslating(false));
     },
-    [updateCurrentSong]
+    [updateCurrentSong, currentSong.dictionary]
   );
+
+  const retranslate = useCallback(() => {
+    if (!currentSong.originalText.trim()) return;
+    setIsTranslating(true);
+    autoTranslateWords(currentSong.originalText, [])
+      .then((newDict) => {
+        updateCurrentSong((song) => ({ ...song, dictionary: newDict }));
+      })
+      .finally(() => setIsTranslating(false));
+  }, [currentSong.originalText, updateCurrentSong]);
 
   const copyParody = useCallback(() => {
     navigator.clipboard.writeText(currentSong.parodyText);
@@ -825,6 +893,8 @@ export function ParodyEditor() {
                   setNewEnglish={setNewEnglish}
                   addEntry={addDictEntry}
                   removeEntry={removeDictEntry}
+                  isTranslating={isTranslating}
+                  onRetranslate={retranslate}
                 />
               )}
             </div>
@@ -979,6 +1049,8 @@ function DictionaryPanel({
   setNewEnglish,
   addEntry,
   removeEntry,
+  isTranslating,
+  onRetranslate,
 }: {
   dictionary: DictEntry[];
   newForeign: string;
@@ -987,6 +1059,8 @@ function DictionaryPanel({
   setNewEnglish: (v: string) => void;
   addEntry: () => void;
   removeEntry: (id: string) => void;
+  isTranslating: boolean;
+  onRetranslate: () => void;
 }) {
   return (
     <div className="space-y-4">
@@ -995,9 +1069,27 @@ function DictionaryPanel({
           <BookOpen size={14} className="text-primary" /> Hindi-English Glossary
         </h3>
         <p className="text-[12px] text-muted-foreground leading-relaxed">
-          Map Romanized Hindi words to English. Toggle the &quot;English&quot;
-          button to view translated lyrics.
+          Auto-populated when lyrics are loaded. Toggle &quot;English&quot; to
+          view translated lyrics. Edit entries to fix bad translations.
         </p>
+      </div>
+
+      {/* Auto-translate status / button */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onRetranslate}
+          disabled={isTranslating}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium bg-primary/10 text-primary rounded-full hover:bg-primary/20 transition-colors disabled:opacity-50"
+        >
+          {isTranslating ? (
+            <><Loader2 size={12} className="animate-spin" /> Translating...</>
+          ) : (
+            <><Zap size={12} /> Re-translate All</>
+          )}
+        </button>
+        <span className="text-[10px] text-muted-foreground">
+          {dictionary.length} {dictionary.length === 1 ? "word" : "words"}
+        </span>
       </div>
 
       {/* Entry list */}
