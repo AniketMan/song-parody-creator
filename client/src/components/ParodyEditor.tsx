@@ -1,10 +1,18 @@
 /**
- * ParodyEditor — Dual-panel editor with scroll-synced highlights.
- * Desktop (>=768px): side-by-side horizontal split.
- * Mobile (<768px): vertical stack (original top, parody bottom).
- * Both panels always visible. Highlight overlay scrolls in sync with textarea.
+ * ParodyEditor -- Dual-panel editor with:
+ * - Word-level diff highlighting (scroll-synced overlay)
+ * - localStorage auto-save
+ * - Cross-panel scroll sync (original <-> parody)
+ * - Syllable/meter counter per line
+ * - Global word swap tool (double-click to select, then replace all)
+ * - Replace All popup on highlighted words
+ *
+ * Desktop: side-by-side. Mobile: vertical stack.
  */
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { Search, Repeat, BarChart2, Copy, Trash2 } from "lucide-react";
+
+// -- Types --
 
 interface ReplaceAllPopup {
   originalWord: string;
@@ -12,6 +20,10 @@ interface ReplaceAllPopup {
   x: number;
   y: number;
 }
+
+type ToolTab = "swap" | "meter";
+
+// -- Hooks --
 
 function useIsMobile() {
   const [mobile, setMobile] = useState(window.innerWidth < 768);
@@ -24,7 +36,60 @@ function useIsMobile() {
   return mobile;
 }
 
-/** A single editor pane with scroll-synced highlight overlay */
+// -- Utilities --
+
+/** Estimate syllable count for a line of text */
+function countSyllables(line: string): number {
+  if (!line) return 0;
+  const words = line.toLowerCase().replace(/[^a-z\s]/g, "").split(/\s+/);
+  let count = 0;
+  for (const word of words) {
+    if (!word) continue;
+    if (word.length <= 3) {
+      count += 1;
+      continue;
+    }
+    let w = word.replace(/(?:es|ed|e)$/, "");
+    w = w.replace(/^y/, "");
+    const vowels = w.match(/[aeiouy]{1,2}/g);
+    count += vowels ? vowels.length : 1;
+  }
+  return count;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// -- Storage --
+
+const STORAGE_KEY = "parody_creator_state_v1";
+
+interface SavedState {
+  originalText: string;
+  parodyText: string;
+}
+
+function loadState(): SavedState | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function saveState(state: SavedState) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Storage restricted -- silently fail
+  }
+}
+
+// -- EditorPane --
+
 function EditorPane({
   label,
   text,
@@ -33,6 +98,9 @@ function EditorPane({
   getDiffClass,
   side,
   onWordClick,
+  textareaRef,
+  onScroll,
+  onDoubleClick,
 }: {
   label: string;
   text: string;
@@ -41,16 +109,28 @@ function EditorPane({
   getDiffClass: (side: "original" | "parody", lineIdx: number, wordIdx: number) => string;
   side: "original" | "parody";
   onWordClick?: (e: React.MouseEvent, lineIdx: number, wordIdx: number) => void;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  onScroll: () => void;
+  onDoubleClick?: (e: React.MouseEvent<HTMLTextAreaElement>) => void;
 }) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
 
-  const handleScroll = useCallback(() => {
+  const syncHighlight = useCallback(() => {
     if (textareaRef.current && highlightRef.current) {
       highlightRef.current.scrollTop = textareaRef.current.scrollTop;
       highlightRef.current.scrollLeft = textareaRef.current.scrollLeft;
     }
-  }, []);
+  }, [textareaRef]);
+
+  const handleScroll = useCallback(() => {
+    syncHighlight();
+    onScroll();
+  }, [syncHighlight, onScroll]);
+
+  // Keep highlight in sync when text changes (content reflow)
+  useEffect(() => {
+    syncHighlight();
+  }, [text, syncHighlight]);
 
   return (
     <div className="h-full flex flex-col min-w-0 min-h-0">
@@ -60,11 +140,11 @@ function EditorPane({
         </span>
       </div>
       <div className="flex-1 relative overflow-hidden min-h-0">
-        {/* Highlight overlay — uses overflow:auto so scrollTop works, but scrollbar is hidden */}
+        {/* Highlight overlay */}
         <div
           ref={highlightRef}
-          className="absolute inset-0 p-3 sm:p-4 md:p-6 font-mono text-[13px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 whitespace-pre-wrap break-words overflow-auto pointer-events-none hide-scrollbar"
-          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          className="absolute inset-0 p-3 sm:p-4 md:p-6 font-mono text-[13px] md:text-[14px] leading-6 sm:leading-7 whitespace-pre-wrap break-words overflow-auto pointer-events-none hide-scrollbar"
+          style={{ scrollbarWidth: "none" }}
           aria-hidden="true"
         >
           {words.map((line, lineIdx) => (
@@ -99,21 +179,46 @@ function EditorPane({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onScroll={handleScroll}
+          onDoubleClick={onDoubleClick}
           spellCheck={false}
-          className="absolute inset-0 w-full h-full p-3 sm:p-4 md:p-6 font-mono text-[13px] sm:text-[13px] md:text-[14px] leading-6 sm:leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words overflow-auto"
+          className="absolute inset-0 w-full h-full p-3 sm:p-4 md:p-6 font-mono text-[13px] md:text-[14px] leading-6 sm:leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words overflow-auto"
         />
       </div>
     </div>
   );
 }
 
+// -- Main Component --
+
 export function ParodyEditor() {
-  const [originalText, setOriginalText] = useState("");
-  const [parodyText, setParodyText] = useState("");
-  const [initialized, setInitialized] = useState(false);
+  // Load persisted state
+  const saved = useMemo(() => loadState(), []);
+
+  const [originalText, setOriginalText] = useState(saved?.originalText ?? "");
+  const [parodyText, setParodyText] = useState(saved?.parodyText ?? "");
+  const [initialized, setInitialized] = useState(!!saved?.originalText);
   const [popup, setPopup] = useState<ReplaceAllPopup | null>(null);
+  const [activeTab, setActiveTab] = useState<ToolTab>("swap");
+
+  // Word swap tool state
+  const [targetWord, setTargetWord] = useState("");
+  const [replaceWord, setReplaceWord] = useState("");
+
+  // Tool panel visibility (desktop: always visible sidebar, mobile: collapsible)
+  const [toolsOpen, setToolsOpen] = useState(false);
+
   const containerRef = useRef<HTMLDivElement>(null);
+  const originalRef = useRef<HTMLTextAreaElement>(null);
+  const parodyRef = useRef<HTMLTextAreaElement>(null);
+  const scrollLockRef = useRef<string | null>(null);
   const isMobile = useIsMobile();
+
+  // Persist state on change
+  useEffect(() => {
+    saveState({ originalText, parodyText });
+  }, [originalText, parodyText]);
+
+  // -- Parsing --
 
   const parseWords = useCallback((text: string): string[][] => {
     return text.split("\n").map((line) =>
@@ -128,10 +233,7 @@ export function ParodyEditor() {
     let count = 0;
     const maxLines = Math.max(originalWords.length, parodyWords.length);
     for (let l = 0; l < maxLines; l++) {
-      const maxW = Math.max(
-        originalWords[l]?.length ?? 0,
-        parodyWords[l]?.length ?? 0
-      );
+      const maxW = Math.max(originalWords[l]?.length ?? 0, parodyWords[l]?.length ?? 0);
       for (let w = 0; w < maxW; w++) {
         const orig = originalWords[l]?.[w] ?? "";
         const paro = parodyWords[l]?.[w] ?? "";
@@ -140,6 +242,8 @@ export function ParodyEditor() {
     }
     return count;
   }, [originalWords, parodyWords]);
+
+  // -- Handlers --
 
   const handlePaste = useCallback((text: string) => {
     setOriginalText(text);
@@ -156,7 +260,12 @@ export function ParodyEditor() {
     setParodyText("");
     setInitialized(false);
     setPopup(null);
+    setTargetWord("");
+    setReplaceWord("");
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
   }, []);
+
+  // -- Diff highlighting --
 
   const getDiffClass = useCallback(
     (side: "original" | "parody", lineIdx: number, wordIdx: number): string => {
@@ -168,6 +277,8 @@ export function ParodyEditor() {
     },
     [originalWords, parodyWords]
   );
+
+  // -- Replace All popup (click highlighted word) --
 
   const handleParodyWordClick = useCallback(
     (e: React.MouseEvent, lineIdx: number, wordIdx: number) => {
@@ -225,57 +336,193 @@ export function ParodyEditor() {
 
   const dismissPopup = useCallback(() => setPopup(null), []);
 
+  // -- Cross-panel scroll sync --
+
+  const handleOriginalScroll = useCallback(() => {
+    if (scrollLockRef.current && scrollLockRef.current !== "original") return;
+    scrollLockRef.current = "original";
+    if (originalRef.current && parodyRef.current) {
+      parodyRef.current.scrollTop = originalRef.current.scrollTop;
+    }
+    setTimeout(() => { scrollLockRef.current = null; }, 50);
+  }, []);
+
+  const handleParodyScroll = useCallback(() => {
+    if (scrollLockRef.current && scrollLockRef.current !== "parody") return;
+    scrollLockRef.current = "parody";
+    if (parodyRef.current && originalRef.current) {
+      originalRef.current.scrollTop = parodyRef.current.scrollTop;
+    }
+    setTimeout(() => { scrollLockRef.current = null; }, 50);
+  }, []);
+
+  // -- Double-click to select word for swap tool --
+
+  const handleDoubleClick = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
+    const textarea = e.currentTarget;
+    const text = textarea.value;
+    const cursor = textarea.selectionStart;
+
+    let start = cursor;
+    while (start > 0 && !/\s/.test(text[start - 1])) start--;
+    let end = cursor;
+    while (end < text.length && !/\s/.test(text[end])) end++;
+
+    const selected = text.slice(start, end).replace(/[^a-zA-Z0-9'-]/g, "").trim();
+    if (selected) {
+      setTargetWord(selected);
+      setReplaceWord("");
+      setActiveTab("swap");
+      if (isMobile) setToolsOpen(true);
+    }
+  }, [isMobile]);
+
+  // -- Global swap (from tool panel) --
+
+  const triggerGlobalSwap = useCallback(() => {
+    if (!targetWord.trim() || !replaceWord.trim()) return;
+    const regex = new RegExp(`\\b${escapeRegExp(targetWord.trim())}\\b`, "gi");
+    setParodyText((prev) => prev.replace(regex, replaceWord.trim()));
+    setTargetWord("");
+    setReplaceWord("");
+  }, [targetWord, replaceWord]);
+
+  // -- Syllable data --
+
+  const syllableData = useMemo(() => {
+    const origLines = originalText.split("\n");
+    const parodyLines = parodyText.split("\n");
+    const maxLen = Math.max(origLines.length, parodyLines.length);
+    const data: { origLine: string; parodyLine: string; origSyl: number; parodySyl: number; match: boolean }[] = [];
+    for (let i = 0; i < maxLen; i++) {
+      const oL = origLines[i] ?? "";
+      const pL = parodyLines[i] ?? "";
+      const oS = countSyllables(oL);
+      const pS = countSyllables(pL);
+      data.push({ origLine: oL, parodyLine: pL, origSyl: oS, parodySyl: pS, match: oS === pS });
+    }
+    return data;
+  }, [originalText, parodyText]);
+
+  // -- Render --
+
   if (!initialized) {
     return <PastePrompt onPaste={handlePaste} />;
   }
 
   return (
-    <div className="h-full flex flex-col relative" ref={containerRef} onClick={dismissPopup}>
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 sm:px-4 md:px-6 py-2 sm:py-2.5 border-b border-border/60 bg-secondary/50 shrink-0">
-        <button
-          onClick={copyParody}
-          className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-primary rounded-full border border-primary/30 hover:bg-primary/5 transition-colors"
-        >
-          Copy Parody
-        </button>
-        <button
-          onClick={clearAll}
-          className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
-        >
-          Start Over
-        </button>
-        <span className="ml-auto text-[11px] sm:text-[13px] text-muted-foreground tabular-nums whitespace-nowrap">
-          {modifiedCount} {modifiedCount === 1 ? "change" : "changes"}
-        </span>
+    <div className="h-full flex relative" ref={containerRef} onClick={dismissPopup}>
+      {/* Main editor area */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* Toolbar */}
+        <div className="flex items-center gap-2 px-3 sm:px-4 md:px-6 py-2 sm:py-2.5 border-b border-border/60 bg-secondary/50 shrink-0">
+          <button
+            onClick={copyParody}
+            className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-primary rounded-full border border-primary/30 hover:bg-primary/5 transition-colors"
+            title="Copy parody text to clipboard"
+          >
+            <span className="hidden sm:inline">Copy Parody</span>
+            <Copy size={14} className="sm:hidden" />
+          </button>
+          <button
+            onClick={clearAll}
+            className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium text-muted-foreground rounded-full border border-border hover:bg-secondary transition-colors"
+            title="Clear everything and start over"
+          >
+            <span className="hidden sm:inline">Start Over</span>
+            <Trash2 size={14} className="sm:hidden" />
+          </button>
+          {isMobile && (
+            <button
+              onClick={() => setToolsOpen(!toolsOpen)}
+              className={`px-2.5 py-1 text-[12px] font-medium rounded-full border transition-colors ${toolsOpen ? "bg-primary text-primary-foreground border-primary" : "text-muted-foreground border-border hover:bg-secondary"}`}
+              title="Toggle tools panel"
+            >
+              Tools
+            </button>
+          )}
+          <span className="ml-auto text-[11px] sm:text-[13px] text-muted-foreground tabular-nums whitespace-nowrap">
+            {modifiedCount} {modifiedCount === 1 ? "change" : "changes"}
+          </span>
+        </div>
+
+        {/* Panels */}
+        <div className={`flex-1 flex overflow-hidden min-h-0 ${isMobile ? "flex-col" : "flex-row"}`}>
+          <div className={`min-w-0 min-h-0 ${isMobile ? "flex-1 border-b border-border/60" : "flex-1 border-r border-border/60"}`}>
+            <EditorPane
+              label="Original"
+              text={originalText}
+              setText={setOriginalText}
+              words={originalWords}
+              getDiffClass={getDiffClass}
+              side="original"
+              textareaRef={originalRef}
+              onScroll={handleOriginalScroll}
+              onDoubleClick={handleDoubleClick}
+            />
+          </div>
+          <div className="flex-1 min-w-0 min-h-0">
+            <EditorPane
+              label="Parody"
+              text={parodyText}
+              setText={(v) => { setParodyText(v); setPopup(null); }}
+              words={parodyWords}
+              getDiffClass={getDiffClass}
+              side="parody"
+              onWordClick={handleParodyWordClick}
+              textareaRef={parodyRef}
+              onScroll={handleParodyScroll}
+              onDoubleClick={handleDoubleClick}
+            />
+          </div>
+        </div>
       </div>
 
-      {/* Panels: vertical on mobile, horizontal on desktop */}
-      <div className={`flex-1 flex overflow-hidden min-h-0 ${isMobile ? "flex-col" : "flex-row"}`}>
-        {/* Original */}
-        <div className={`min-w-0 min-h-0 ${isMobile ? "flex-1 border-b border-border/60" : "flex-1 border-r border-border/60"}`}>
-          <EditorPane
-            label="Original"
-            text={originalText}
-            setText={setOriginalText}
-            words={originalWords}
-            getDiffClass={getDiffClass}
-            side="original"
-          />
+      {/* Tools sidebar (desktop: always visible, mobile: overlay) */}
+      {(isMobile ? toolsOpen : true) && (
+        <div className={`${isMobile ? "absolute inset-0 z-40 bg-background/95 backdrop-blur-sm" : "w-72 xl:w-80 border-l border-border/60 shrink-0"} flex flex-col`}>
+          {isMobile && (
+            <div className="flex items-center justify-between px-4 py-2 border-b border-border/60">
+              <span className="text-[13px] font-semibold">Tools</span>
+              <button onClick={() => setToolsOpen(false)} className="text-muted-foreground text-[13px] hover:text-foreground">
+                Done
+              </button>
+            </div>
+          )}
+
+          {/* Tab switcher */}
+          <div className="flex border-b border-border/60 shrink-0">
+            <button
+              onClick={() => setActiveTab("swap")}
+              className={`flex-1 py-2.5 text-[11px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors ${activeTab === "swap" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <Search size={12} /> Swap
+            </button>
+            <button
+              onClick={() => setActiveTab("meter")}
+              className={`flex-1 py-2.5 text-[11px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors ${activeTab === "meter" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <BarChart2 size={12} /> Meter
+            </button>
+          </div>
+
+          {/* Tab content */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {activeTab === "swap" && (
+              <SwapPanel
+                targetWord={targetWord}
+                setTargetWord={setTargetWord}
+                replaceWord={replaceWord}
+                setReplaceWord={setReplaceWord}
+                onSwap={triggerGlobalSwap}
+              />
+            )}
+            {activeTab === "meter" && (
+              <MeterPanel data={syllableData} />
+            )}
+          </div>
         </div>
-        {/* Parody */}
-        <div className="flex-1 min-w-0 min-h-0">
-          <EditorPane
-            label="Parody"
-            text={parodyText}
-            setText={(v) => { setParodyText(v); setPopup(null); }}
-            words={parodyWords}
-            getDiffClass={getDiffClass}
-            side="parody"
-            onWordClick={handleParodyWordClick}
-          />
-        </div>
-      </div>
+      )}
 
       {/* Replace All Popup */}
       {popup && (
@@ -313,7 +560,124 @@ export function ParodyEditor() {
   );
 }
 
-/** Initial paste prompt */
+// -- Swap Panel --
+
+function SwapPanel({
+  targetWord,
+  setTargetWord,
+  replaceWord,
+  setReplaceWord,
+  onSwap,
+}: {
+  targetWord: string;
+  setTargetWord: (v: string) => void;
+  replaceWord: string;
+  setReplaceWord: (v: string) => void;
+  onSwap: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
+          <Repeat size={14} className="text-primary" /> Global Word Swap
+        </h3>
+        <p className="text-[12px] text-muted-foreground leading-relaxed">
+          Double-click any word in either panel to load it here. Then type the replacement and swap all occurrences.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <div>
+          <label className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider block mb-1">
+            Target Word
+          </label>
+          <input
+            type="text"
+            value={targetWord}
+            onChange={(e) => setTargetWord(e.target.value)}
+            placeholder="Double-click a word..."
+            className="w-full border border-border rounded-lg px-3 py-2 text-[13px] bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider block mb-1">
+            Replace With
+          </label>
+          <input
+            type="text"
+            value={replaceWord}
+            onChange={(e) => setReplaceWord(e.target.value)}
+            placeholder="New word..."
+            onKeyDown={(e) => { if (e.key === "Enter") onSwap(); }}
+            className="w-full border border-border rounded-lg px-3 py-2 text-[13px] bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all"
+          />
+        </div>
+        <button
+          onClick={onSwap}
+          disabled={!targetWord.trim() || !replaceWord.trim()}
+          className="w-full py-2 bg-primary text-primary-foreground text-[13px] font-medium rounded-full hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+        >
+          <Repeat size={13} /> Swap All Occurrences
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// -- Meter Panel --
+
+function MeterPanel({ data }: { data: { origLine: string; parodyLine: string; origSyl: number; parodySyl: number; match: boolean }[] }) {
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
+          <BarChart2 size={14} className="text-primary" /> Syllable Meter
+        </h3>
+        <p className="text-[12px] text-muted-foreground leading-relaxed">
+          Compare syllable counts line-by-line. Green means your parody matches the original rhythm.
+        </p>
+      </div>
+
+      <div className="space-y-1.5 max-h-[60vh] overflow-y-auto hide-scrollbar">
+        {data.map((row, idx) => {
+          if (!row.origLine.trim() && !row.parodyLine.trim()) return null;
+          return (
+            <div
+              key={idx}
+              className="flex items-center justify-between px-3 py-2 rounded-lg border border-border/60 bg-secondary/30 text-[12px]"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[10px] font-mono text-muted-foreground shrink-0 w-5">
+                  {idx + 1}
+                </span>
+                <span className="truncate text-foreground/80 max-w-[120px]">
+                  {row.parodyLine || "---"}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[10px] text-muted-foreground font-mono">
+                  {row.origSyl}
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                    row.match
+                      ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                      : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
+                  }`}
+                >
+                  {row.parodySyl}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// -- Paste Prompt --
+
 function PastePrompt({ onPaste }: { onPaste: (text: string) => void }) {
   const [value, setValue] = useState("");
 
