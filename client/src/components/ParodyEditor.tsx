@@ -4,13 +4,13 @@
  * - localStorage auto-save
  * - Cross-panel scroll sync (original <-> parody)
  * - Syllable/meter counter per line
- * - Global word swap tool (double-click to select, then replace all)
  * - Replace All popup on highlighted words
  *
  * Desktop: side-by-side. Mobile: vertical stack.
  */
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { Search, Repeat, BarChart2, Copy, Trash2 } from "lucide-react";
+import { BarChart2, Copy, Trash2 } from "lucide-react";
+
 
 // -- Types --
 
@@ -21,7 +21,7 @@ interface ReplaceAllPopup {
   y: number;
 }
 
-type ToolTab = "swap" | "meter";
+
 
 // -- Hooks --
 
@@ -57,9 +57,6 @@ function countSyllables(line: string): number {
   return count;
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 // -- Storage --
 
@@ -100,7 +97,6 @@ function EditorPane({
   onWordClick,
   textareaRef,
   onScroll,
-  onDoubleClick,
 }: {
   label: string;
   text: string;
@@ -111,7 +107,6 @@ function EditorPane({
   onWordClick?: (e: React.MouseEvent, lineIdx: number, wordIdx: number) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   onScroll: () => void;
-  onDoubleClick?: (e: React.MouseEvent<HTMLTextAreaElement>) => void;
 }) {
   const highlightRef = useRef<HTMLDivElement>(null);
 
@@ -179,7 +174,6 @@ function EditorPane({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onScroll={handleScroll}
-          onDoubleClick={onDoubleClick}
           spellCheck={false}
           className="absolute inset-0 w-full h-full p-3 sm:p-4 md:p-6 font-mono text-[13px] md:text-[14px] leading-6 sm:leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words overflow-auto"
         />
@@ -198,12 +192,6 @@ export function ParodyEditor() {
   const [parodyText, setParodyText] = useState(saved?.parodyText ?? "");
   const [initialized, setInitialized] = useState(!!saved?.originalText);
   const [popup, setPopup] = useState<ReplaceAllPopup | null>(null);
-  const [activeTab, setActiveTab] = useState<ToolTab>("swap");
-
-  // Word swap tool state
-  const [targetWord, setTargetWord] = useState("");
-  const [replaceWord, setReplaceWord] = useState("");
-
   // Tool panel visibility (desktop: always visible sidebar, mobile: collapsible)
   const [toolsOpen, setToolsOpen] = useState(false);
 
@@ -260,8 +248,6 @@ export function ParodyEditor() {
     setParodyText("");
     setInitialized(false);
     setPopup(null);
-    setTargetWord("");
-    setReplaceWord("");
     try { localStorage.removeItem(STORAGE_KEY); } catch {}
   }, []);
 
@@ -356,36 +342,7 @@ export function ParodyEditor() {
     setTimeout(() => { scrollLockRef.current = null; }, 50);
   }, []);
 
-  // -- Double-click to select word for swap tool --
 
-  const handleDoubleClick = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
-    const textarea = e.currentTarget;
-    const text = textarea.value;
-    const cursor = textarea.selectionStart;
-
-    let start = cursor;
-    while (start > 0 && !/\s/.test(text[start - 1])) start--;
-    let end = cursor;
-    while (end < text.length && !/\s/.test(text[end])) end++;
-
-    const selected = text.slice(start, end).replace(/[^a-zA-Z0-9'-]/g, "").trim();
-    if (selected) {
-      setTargetWord(selected);
-      setReplaceWord("");
-      setActiveTab("swap");
-      if (isMobile) setToolsOpen(true);
-    }
-  }, [isMobile]);
-
-  // -- Global swap (from tool panel) --
-
-  const triggerGlobalSwap = useCallback(() => {
-    if (!targetWord.trim() || !replaceWord.trim()) return;
-    const regex = new RegExp(`\\b${escapeRegExp(targetWord.trim())}\\b`, "gi");
-    setParodyText((prev) => prev.replace(regex, replaceWord.trim()));
-    setTargetWord("");
-    setReplaceWord("");
-  }, [targetWord, replaceWord]);
 
   // -- Syllable data --
 
@@ -458,7 +415,6 @@ export function ParodyEditor() {
               side="original"
               textareaRef={originalRef}
               onScroll={handleOriginalScroll}
-              onDoubleClick={handleDoubleClick}
             />
           </div>
           <div className="flex-1 min-w-0 min-h-0">
@@ -472,7 +428,6 @@ export function ParodyEditor() {
               onWordClick={handleParodyWordClick}
               textareaRef={parodyRef}
               onScroll={handleParodyScroll}
-              onDoubleClick={handleDoubleClick}
             />
           </div>
         </div>
@@ -490,36 +445,9 @@ export function ParodyEditor() {
             </div>
           )}
 
-          {/* Tab switcher */}
-          <div className="flex border-b border-border/60 shrink-0">
-            <button
-              onClick={() => setActiveTab("swap")}
-              className={`flex-1 py-2.5 text-[11px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors ${activeTab === "swap" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              <Search size={12} /> Swap
-            </button>
-            <button
-              onClick={() => setActiveTab("meter")}
-              className={`flex-1 py-2.5 text-[11px] font-semibold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors ${activeTab === "meter" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              <BarChart2 size={12} /> Meter
-            </button>
-          </div>
-
-          {/* Tab content */}
+          {/* Meter content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {activeTab === "swap" && (
-              <SwapPanel
-                targetWord={targetWord}
-                setTargetWord={setTargetWord}
-                replaceWord={replaceWord}
-                setReplaceWord={setReplaceWord}
-                onSwap={triggerGlobalSwap}
-              />
-            )}
-            {activeTab === "meter" && (
-              <MeterPanel data={syllableData} />
-            )}
+            <MeterPanel data={syllableData} />
           </div>
         </div>
       )}
@@ -560,69 +488,6 @@ export function ParodyEditor() {
   );
 }
 
-// -- Swap Panel --
-
-function SwapPanel({
-  targetWord,
-  setTargetWord,
-  replaceWord,
-  setReplaceWord,
-  onSwap,
-}: {
-  targetWord: string;
-  setTargetWord: (v: string) => void;
-  replaceWord: string;
-  setReplaceWord: (v: string) => void;
-  onSwap: () => void;
-}) {
-  return (
-    <div className="space-y-4">
-      <div className="space-y-1">
-        <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
-          <Repeat size={14} className="text-primary" /> Global Word Swap
-        </h3>
-        <p className="text-[12px] text-muted-foreground leading-relaxed">
-          Double-click any word in either panel to load it here. Then type the replacement and swap all occurrences.
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <div>
-          <label className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider block mb-1">
-            Target Word
-          </label>
-          <input
-            type="text"
-            value={targetWord}
-            onChange={(e) => setTargetWord(e.target.value)}
-            placeholder="Double-click a word..."
-            className="w-full border border-border rounded-lg px-3 py-2 text-[13px] bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all"
-          />
-        </div>
-        <div>
-          <label className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider block mb-1">
-            Replace With
-          </label>
-          <input
-            type="text"
-            value={replaceWord}
-            onChange={(e) => setReplaceWord(e.target.value)}
-            placeholder="New word..."
-            onKeyDown={(e) => { if (e.key === "Enter") onSwap(); }}
-            className="w-full border border-border rounded-lg px-3 py-2 text-[13px] bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all"
-          />
-        </div>
-        <button
-          onClick={onSwap}
-          disabled={!targetWord.trim() || !replaceWord.trim()}
-          className="w-full py-2 bg-primary text-primary-foreground text-[13px] font-medium rounded-full hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
-        >
-          <Repeat size={13} /> Swap All Occurrences
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // -- Meter Panel --
 
