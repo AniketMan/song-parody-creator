@@ -405,6 +405,11 @@ export function ParodyEditor() {
   const [songs, setSongs] = useState<Song[]>(initialSongs);
   const [currentSongId, setCurrentSongId] = useState(initialSongs[0].id);
   const [popup, setPopup] = useState<ReplaceAllPopup | null>(null);
+  const [selectedModifiedWord, setSelectedModifiedWord] = useState<{
+    originalWord: string;
+    newWord: string;
+    count: number;
+  } | null>(null);
   const [isEnglishMode, setIsEnglishMode] = useState(false);
   const [activeTab, setActiveTab] = useState<ToolTab>("meter");
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -496,6 +501,7 @@ export function ParodyEditor() {
         return { ...song, parodyText: rawValue };
       });
       setPopup(null);
+      setSelectedModifiedWord(null);
     },
     [updateCurrentSong, isEnglishMode]
   );
@@ -629,6 +635,15 @@ export function ParodyEditor() {
           if (w.toLowerCase() === orig.toLowerCase()) instanceCount++;
         }
       }
+
+      // Always set the selected word for the toolbar button
+      setSelectedModifiedWord({
+        originalWord: orig,
+        newWord: paro,
+        count: instanceCount,
+      });
+
+      // Only show positioned popup on desktop if multiple instances
       if (instanceCount <= 1) return;
 
       const rect = containerRef.current?.getBoundingClientRect();
@@ -685,6 +700,52 @@ export function ParodyEditor() {
   ]);
 
   const dismissPopup = useCallback(() => setPopup(null), []);
+
+  // Toolbar-based Replace All (works on mobile without needing positioned popup)
+  const handleToolbarReplaceAll = useCallback(() => {
+    if (!selectedModifiedWord) return;
+    const { originalWord, newWord } = selectedModifiedWord;
+
+    const newParodyLines = displayParody.split("\n").map((line, lineIdx) => {
+      const words = line.split(/(\s+)/);
+      const origLine = originalWords[lineIdx] ?? [];
+      let origWordIdx = 0;
+
+      return words
+        .map((token) => {
+          if (token.match(/^\s*$/) || token.length === 0) return token;
+          const correspondingOrig = origLine[origWordIdx] ?? "";
+          origWordIdx++;
+          if (
+            correspondingOrig.toLowerCase() === originalWord.toLowerCase() &&
+            token.toLowerCase() === originalWord.toLowerCase()
+          ) {
+            if (correspondingOrig === correspondingOrig.toUpperCase())
+              return newWord.toUpperCase();
+            if (correspondingOrig[0] === correspondingOrig[0].toUpperCase())
+              return newWord[0].toUpperCase() + newWord.slice(1);
+            return newWord;
+          }
+          return token;
+        })
+        .join("");
+    });
+
+    const newText = newParodyLines.join("\n");
+    const stored = isEnglishMode
+      ? convertText(newText, currentSong.dictionary, false)
+      : newText;
+    updateCurrentSong((song) => ({ ...song, parodyText: stored }));
+    setSelectedModifiedWord(null);
+    setPopup(null);
+  }, [
+    selectedModifiedWord,
+    displayParody,
+    originalWords,
+    isEnglishMode,
+    currentSong.dictionary,
+    updateCurrentSong,
+  ]);
 
   // -- Cross-panel scroll sync --
 
@@ -839,6 +900,20 @@ export function ParodyEditor() {
         </button>
 
         <div className="flex-1" />
+
+        {/* Replace All button - shows when a modified word is selected */}
+        {selectedModifiedWord && selectedModifiedWord.count > 1 && (
+          <button
+            onClick={handleToolbarReplaceAll}
+            className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-[13px] font-medium bg-primary text-primary-foreground rounded-full hover:opacity-90 transition-opacity animate-in fade-in"
+            title={`Replace all "${selectedModifiedWord.originalWord}" with "${selectedModifiedWord.newWord}"`}
+          >
+            <span className="hidden sm:inline">
+              Replace &quot;{selectedModifiedWord.originalWord}&quot; → &quot;{selectedModifiedWord.newWord}&quot;
+            </span>
+            <span className="sm:hidden">Replace All ({selectedModifiedWord.count})</span>
+          </button>
+        )}
 
         {/* Actions */}
         <button
