@@ -279,6 +279,64 @@ function EditorPane({
     syncHighlight();
   }, [text, syncHighlight]);
 
+  // Handle clicks on the textarea to detect taps on modified words (mobile fix)
+  const handleTextareaClick = useCallback(
+    (e: React.MouseEvent<HTMLTextAreaElement>) => {
+      if (!onWordClick) return;
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      const caretPos = textarea.selectionStart;
+      if (caretPos === undefined || caretPos === null) return;
+
+      // Map caret position to line and word index
+      const lines = text.split("\n");
+      let charCount = 0;
+      let targetLineIdx = -1;
+      let posInLine = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const lineLen = lines[i].length + 1; // +1 for newline
+        if (charCount + lineLen > caretPos) {
+          targetLineIdx = i;
+          posInLine = caretPos - charCount;
+          break;
+        }
+        charCount += lineLen;
+      }
+
+      if (targetLineIdx === -1) {
+        targetLineIdx = lines.length - 1;
+        posInLine = (lines[targetLineIdx] || "").length;
+      }
+
+      // Find which word the caret is in
+      const line = lines[targetLineIdx] || "";
+      const lineWords = line.split(/\s+/).filter((w) => w.length > 0);
+      let wordStart = 0;
+      let targetWordIdx = -1;
+
+      for (let w = 0; w < lineWords.length; w++) {
+        const idx = line.indexOf(lineWords[w], wordStart);
+        const wordEnd = idx + lineWords[w].length;
+        if (posInLine >= idx && posInLine <= wordEnd) {
+          targetWordIdx = w;
+          break;
+        }
+        wordStart = wordEnd;
+      }
+
+      if (targetWordIdx === -1) return;
+
+      // Only trigger if this word is modified
+      const cls = getDiffClass(side, targetLineIdx, targetWordIdx);
+      if (cls === "") return;
+
+      onWordClick(e as unknown as React.MouseEvent, targetLineIdx, targetWordIdx);
+    },
+    [onWordClick, textareaRef, text, getDiffClass, side]
+  );
+
   return (
     <div className="h-full flex flex-col min-w-0 min-h-0">
       <div className="px-3 sm:px-4 md:px-6 py-1.5 sm:py-2 border-b border-border/40 shrink-0">
@@ -326,6 +384,7 @@ function EditorPane({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onScroll={handleScroll}
+          onClick={handleTextareaClick}
           spellCheck={false}
           className="absolute inset-0 w-full h-full p-3 sm:p-4 md:p-6 font-mono text-[13px] md:text-[14px] leading-6 sm:leading-7 bg-transparent text-foreground resize-none focus:outline-none caret-primary whitespace-pre-wrap break-words overflow-auto"
         />
@@ -906,11 +965,20 @@ export function ParodyEditor() {
           <div
             className="absolute z-50 bg-popover border border-border rounded-xl shadow-lg p-3 sm:p-4 flex flex-col gap-2 sm:gap-3 min-w-[180px] sm:min-w-[200px] max-w-[calc(100vw-2rem)]"
             style={{
-              left: Math.min(
-                popup.x,
-                (containerRef.current?.offsetWidth ?? 300) - 200
+              left: Math.max(
+                8,
+                Math.min(
+                  popup.x,
+                  (containerRef.current?.offsetWidth ?? 300) - 200
+                )
               ),
-              top: popup.y + 8,
+              top: Math.max(
+                8,
+                Math.min(
+                  popup.y + 8,
+                  (containerRef.current?.offsetHeight ?? 400) - 120
+                )
+              ),
             }}
             onClick={(e) => e.stopPropagation()}
           >
